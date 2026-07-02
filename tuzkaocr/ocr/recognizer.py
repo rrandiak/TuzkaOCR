@@ -7,6 +7,8 @@ from typing import List, NamedTuple, Tuple
 import numpy as np
 import onnxruntime as ort
 
+from ..ort_session import build_providers
+
 from .vocab import load_vocab
 
 
@@ -79,22 +81,16 @@ def _session_options(threads: int, cpu_mem_arena: bool) -> ort.SessionOptions:
     return opts
 
 
-def _providers(device: str) -> list[str]:
-    if device == "cuda":
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    return ["CPUExecutionProvider"]
-
-
 class OnnxRecognizer:
     def __init__(self, model_path: str | Path, vocab_path: str | Path | None = None,
                  device: str = "cpu", threads: int = 4, max_width: int = 1600,
-                 cpu_mem_arena: bool = True):
+                 cpu_mem_arena: bool = True, cuda_opts: dict | None = None):
         self.chars, _ = load_vocab(vocab_path)
         self.max_width = max_width
 
         self.session = ort.InferenceSession(
             str(model_path), sess_options=_session_options(threads, cpu_mem_arena),
-            providers=_providers(device)
+            providers=build_providers(device, cuda_opts)
         )
         self._input_name = self.session.get_inputs()[0].name
 
@@ -139,23 +135,26 @@ def _require_style_model(path: Path) -> None:
 class PageStyleRecognizer(OnnxRecognizer):
     def __init__(self, model_path: str | Path, vocab_path: str | Path | None = None,
                  device: str = "cpu", threads: int = 4, max_width: int = 1600,
-                 cpu_mem_arena: bool = True, style_path: str | Path | None = None):
-        super().__init__(model_path, vocab_path, device, threads, max_width, cpu_mem_arena)
+                 cpu_mem_arena: bool = True, style_path: str | Path | None = None,
+                 cuda_opts: dict | None = None):
+        super().__init__(model_path, vocab_path, device, threads, max_width, cpu_mem_arena,
+                         cuda_opts)
         self._initialize_style_model(
-            model_path, vocab_path, device, threads, cpu_mem_arena, style_path
+            model_path, vocab_path, device, threads, cpu_mem_arena, style_path, cuda_opts
         )
 
     def _initialize_style_model(self, model_path: str | Path,
                                 vocab_path: str | Path | None,
                                 device: str, threads: int, cpu_mem_arena: bool,
-                                style_path: str | Path | None) -> None:
+                                style_path: str | Path | None,
+                                cuda_opts: dict | None = None) -> None:
         resolved_style_path = (Path(style_path) if style_path is not None
                                else _style_model_path(model_path))
         _require_style_model(resolved_style_path)
         self.style_session = ort.InferenceSession(
             str(resolved_style_path),
             sess_options=_session_options(threads, cpu_mem_arena),
-            providers=_providers(device),
+            providers=build_providers(device, cuda_opts),
         )
         style_shape = self.style_session.get_outputs()[0].shape
         style_dim = style_shape[-1] if style_shape else None
@@ -197,11 +196,12 @@ class PageStyleRecognizer(OnnxRecognizer):
                          model_path: str | Path,
                          vocab_path: str | Path | None,
                          device: str, threads: int, cpu_mem_arena: bool,
-                         style_path: str | Path | None = None) -> PageStyleRecognizer:
+                         style_path: str | Path | None = None,
+                         cuda_opts: dict | None = None) -> PageStyleRecognizer:
         instance = cls.__new__(cls)
         instance.__dict__.update(recognizer.__dict__)
         instance._initialize_style_model(
-            model_path, vocab_path, device, threads, cpu_mem_arena, style_path
+            model_path, vocab_path, device, threads, cpu_mem_arena, style_path, cuda_opts
         )
         return instance
 
@@ -260,13 +260,15 @@ class PageStyleRecognizer(OnnxRecognizer):
 
 def create_recognizer(model_path: str | Path, vocab_path: str | Path | None = None,
                       device: str = "cpu", threads: int = 4, max_width: int = 1600,
-                      cpu_mem_arena: bool = True) -> OnnxRecognizer:
+                      cpu_mem_arena: bool = True,
+                      cuda_opts: dict | None = None) -> OnnxRecognizer:
     recognizer = OnnxRecognizer(
-        model_path, vocab_path, device, threads, max_width, cpu_mem_arena
+        model_path, vocab_path, device, threads, max_width, cpu_mem_arena, cuda_opts
     )
     input_names = {item.name for item in recognizer.session.get_inputs()}
     if {"style", "has_style"}.issubset(input_names):
         return PageStyleRecognizer._from_recognizer(
-            recognizer, model_path, vocab_path, device, threads, cpu_mem_arena
+            recognizer, model_path, vocab_path, device, threads, cpu_mem_arena,
+            cuda_opts=cuda_opts
         )
     return recognizer

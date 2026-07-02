@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from ..ort_session import build_providers
+
 from .large_text import apply_large_text
 from .postprocess import maps_to_regions, Region
 from .textsize import estimate_line_height
@@ -61,7 +63,8 @@ def _sigmoid_inplace(x: np.ndarray) -> None:
 class LayoutDetector:
     def __init__(self, model_path: str | Path, device: str = "cpu", threads: int = 4,
                  cpu_mem_arena: bool = True, column_split: bool = False,
-                 reading_order: str = "basic", large_text: bool = False):
+                 reading_order: str = "basic", large_text: bool = False,
+                 cuda_opts: dict | None = None):
         self.column_split = column_split
         self.reading_order = reading_order
         self.large_text = large_text
@@ -70,10 +73,7 @@ class LayoutDetector:
         opts.inter_op_num_threads = max(1, threads // 2)
         opts.enable_cpu_mem_arena = cpu_mem_arena
 
-        if device == "cuda":
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        else:
-            providers = ["CPUExecutionProvider"]
+        providers = build_providers(device, cuda_opts)
 
         self.session = ort.InferenceSession(
             str(model_path), sess_options=opts, providers=providers
