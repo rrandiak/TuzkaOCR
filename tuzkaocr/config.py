@@ -72,6 +72,19 @@ class Config:
     recognizer_arena_extend_strategy: str = field(default_factory=lambda: _env("RECOGNIZER_ARENA_EXTEND_STRATEGY", "kNextPowerOfTwo"))
     gpu_mem_limit_mb:              int = field(default_factory=lambda: _env("GPU_MEM_LIMIT_MB", 0))
 
+    # Cap on concurrent GPU inferences, shared process-wide (see pipeline._gpu_semaphore).
+    # page_workers parallelizes CPU pre/post AND GPU inference; on CUDA a single layout+
+    # recognizer inference holds a large transient (~6-7 GB on full-page scans), so running
+    # page_workers of them concurrently exhausts VRAM. This bounds the GPU-resident set to
+    # `gpu_concurrency` inferences while page_workers keeps the CPU side busy. 0 = unlimited
+    # (old behavior). On CUDA set it to VRAM // per-inference-footprint (e.g. 1 on a 16 GB card).
+    gpu_concurrency:              int = field(default_factory=lambda: _env("GPU_CONCURRENCY", 0))
+
+    # Release unused GPU arena chunks after each inference (memory.enable_memory_arena_shrinkage,
+    # see pipeline._wrap_gpu_session). Keeps VRAM flat under high page_workers/gpu_concurrency at a
+    # ~6-7 % throughput cost; without it the fast (high-concurrency) configs OOM. CUDA only.
+    gpu_arena_shrink:             bool = field(default_factory=lambda: _env("GPU_ARENA_SHRINK", False))
+
     role_classifier: bool = field(default_factory=lambda: _env("ROLE_CLASSIFIER", False))
     role_model:      str  = field(default_factory=lambda: _env("ROLE_MODEL", "role-H5.onnx"))
 
@@ -100,6 +113,7 @@ class Config:
         _pos_int("ocr_threads",       self.ocr_threads)
         _pos_int("line_workers",      self.line_workers)
         _pos_int("page_workers",      self.page_workers)
+        _pos_int("gpu_concurrency",   self.gpu_concurrency, allow_zero=True)
         _pos_int("max_width",         self.max_width)
         _pos_int("max_queue",         self.max_queue)
         _pos_int("max_upload_mb",     self.max_upload_mb)
