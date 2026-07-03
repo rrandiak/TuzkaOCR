@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,42 @@ from .layout.role import RoleClassifier
 from .ocr.recognizer import create_recognizer
 from .alto import HYPHEN_CHARS, build_alto
 from .pagexml import build_page_xml
+
+
+# Process-wide cap on concurrent GPU inferences. Shared across every PageProcessor (the default
+# and kramarky engines contend for the same VRAM), so it lives at module scope, created once.
+_GPU_SEM: "threading.BoundedSemaphore | None" = None
+_GPU_SEM_LOCK = threading.Lock()
+
+
+def _gpu_semaphore(concurrency: int) -> "threading.BoundedSemaphore | None":
+    """Return the shared GPU-concurrency semaphore. 0 = unlimited (None). Created once."""
+    global _GPU_SEM
+    if concurrency <= 0:
+        return None
+    with _GPU_SEM_LOCK:
+        if _GPU_SEM is None:
+            _GPU_SEM = threading.BoundedSemaphore(concurrency)
+    return _GPU_SEM
+
+
+def _wrap_gpu_session(session, sem, shrink: bool) -> None:
+    """Wrap an ORT session's run(): cap concurrency via `sem` and/or shrink the arena per run."""
+    orig = session.run
+    run_opts = None
+    if shrink:
+        import onnxruntime as ort
+        run_opts = ort.RunOptions()
+        run_opts.add_run_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")
+
+    def run(output_names, input_feed, run_options=None):
+        opts = run_options if run_options is not None else run_opts
+        if sem is None:
+            return orig(output_names, input_feed, opts)
+        with sem:                       # acquire/release per run; no nesting -> no deadlock
+            return orig(output_names, input_feed, opts)
+
+    session.run = run
 
 
 @dataclass
@@ -180,6 +217,19 @@ class PageProcessor:
         self._role: Optional[RoleClassifier] = None
         self._lang: Optional[LanguageDetector] = None
 
+        # GPU-concurrency cap + per-run arena shrinkage keep VRAM bounded when page_workers runs
+        # many inferences on the shared CUDA arena. CUDA-only: on CPU there's no VRAM to bound and
+        # serializing run() would only hurt. Both default-off -> no behavior change unless set.
+        self._gpu_sem = _gpu_semaphore(config.gpu_concurrency) if device_str == "cuda" else None
+        self._gpu_shrink = config.gpu_arena_shrink and device_str == "cuda"
+        if self._gpu_sem is not None or self._gpu_shrink:
+            _wrap_gpu_session(self.detector.session, self._gpu_sem, self._gpu_shrink)
+            _wrap_gpu_session(self.recognizer.session, self._gpu_sem, self._gpu_shrink)
+            # page-style recognizers (rec-I-v2) run a second, per-line style model
+            style_session = getattr(self.recognizer, "style_session", None)
+            if style_session is not None:
+                _wrap_gpu_session(style_session, self._gpu_sem, self._gpu_shrink)
+
     def _layout_pass(self, img_bgr: np.ndarray) -> dict:
         if self.config.adaptive_downsample and self.config.layout_line_height > 0:
             regions, img_scale = self.detector.detect(
@@ -280,6 +330,8 @@ class PageProcessor:
                                             device=self._device, threads=cfg.ocr_threads,
                                             cpu_mem_arena=cfg.cpu_mem_arena,
                                             cuda_opts=cfg.cuda_provider_options())
+                if self._gpu_sem is not None or self._gpu_shrink:
+                    _wrap_gpu_session(self._role.session, self._gpu_sem, self._gpu_shrink)
             self._role.classify_blocks(blocks, img_bgr)
 
         return (img_h, img_w, blocks, float(chosen["mean_conf"]),
