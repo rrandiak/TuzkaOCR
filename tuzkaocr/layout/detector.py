@@ -37,7 +37,8 @@ def _sigmoid_inplace(x: np.ndarray) -> None:
 
 class LayoutDetector:
     def __init__(self, model_path: str | Path, device: str = "cpu", threads: int = 4,
-                 cpu_mem_arena: bool = True):
+                 cpu_mem_arena: bool = True, column_split: bool = False):
+        self.column_split = column_split
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = threads
         opts.inter_op_num_threads = max(1, threads // 2)
@@ -106,7 +107,7 @@ class LayoutDetector:
             return self._detect_split(img_bgr, downsample)
 
         maps, img_scale, gray = self.get_maps(img_bgr, downsample)
-        return maps_to_regions(maps, gray), img_scale
+        return maps_to_regions(maps, gray, column_split=self.column_split), img_scale
 
     def _detect_split(self, img_bgr: np.ndarray, downsample: int | None = None) -> tuple[list[Region], float]:
         h, w = img_bgr.shape[:2]
@@ -115,11 +116,11 @@ class LayoutDetector:
 
         left_maps, _, left_gray  = self.get_maps(img_bgr[:, :mid], downsample)
         L_wd = left_maps.shape[1]
-        left_regions = maps_to_regions(left_maps, left_gray)
+        left_regions = maps_to_regions(left_maps, left_gray, column_split=self.column_split)
 
         right_maps, _, right_gray = self.get_maps(img_bgr[:, mid:], downsample)
         R_wd = right_maps.shape[1]
-        right_regions = maps_to_regions(right_maps, right_gray)
+        right_regions = maps_to_regions(right_maps, right_gray, column_split=self.column_split)
 
         pre_scale = MAX_ORIGINAL_WIDTH / w if w > MAX_ORIGINAL_WIDTH else 1.0
         F_w = int(w * pre_scale) if w > MAX_ORIGINAL_WIDTH else w

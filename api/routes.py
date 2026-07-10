@@ -16,7 +16,7 @@ from fastapi.security.api_key import APIKeyHeader
 from tuzkaocr import _models
 from tuzkaocr.jobs import JobStoreFull
 
-ALLOWED_DOMAINS = {"kramarky"}
+ALLOWED_DOMAINS = {"kramarky", "handwritten", "kurrent"}
 ALLOWED_FMTS = {"alto", "txt", "multi"}
 ALLOWED_WHICH = {"alto", "txt"}
 SPOOL_MAX_SIZE = 8 * 1024 * 1024
@@ -80,6 +80,53 @@ def _require_key(request: Request, key: Optional[str] = Security(_api_key_header
     return None
 
 
+def _exif_orientation(data: bytes) -> int:
+    try:
+        if data[:2] != b"\xff\xd8":
+            return 1
+        i = 2
+        while i + 4 < len(data):
+            if data[i] != 0xFF:
+                return 1
+            marker = data[i + 1]
+            size = int.from_bytes(data[i + 2:i + 4], "big")
+            if marker == 0xE1 and data[i + 4:i + 10] == b"Exif\x00\x00":
+                t = i + 10
+                endian = "little" if data[t:t + 2] == b"II" else "big"
+                ifd = t + int.from_bytes(data[t + 4:t + 8], endian)
+                n = int.from_bytes(data[ifd:ifd + 2], endian)
+                for e in range(n):
+                    p = ifd + 2 + 12 * e
+                    if int.from_bytes(data[p:p + 2], endian) == 0x0112:
+                        return int.from_bytes(data[p + 8:p + 10], endian)
+                return 1
+            if marker in (0xD8, 0xD9) or (0xD0 <= marker <= 0xD7):
+                i += 2
+            else:
+                i += 2 + size
+        return 1
+    except Exception:
+        return 1
+
+
+def _apply_exif_orientation(img: np.ndarray, orient: int) -> np.ndarray:
+    if orient == 2:
+        return cv2.flip(img, 1)
+    if orient == 3:
+        return cv2.rotate(img, cv2.ROTATE_180)
+    if orient == 4:
+        return cv2.flip(img, 0)
+    if orient == 5:
+        return cv2.flip(cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE), 1)
+    if orient == 6:
+        return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    if orient == 7:
+        return cv2.flip(cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE), 1)
+    if orient == 8:
+        return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return img
+
+
 def _decode_image(data: bytes, max_pixels: int) -> np.ndarray:
     arr = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -91,11 +138,14 @@ def _decode_image(data: bytes, max_pixels: int) -> np.ndarray:
             status_code=422,
             detail=f"Image too large: {pixels} pixels exceeds limit of {max_pixels}",
         )
+    orient = _exif_orientation(data)
+    if orient != 1:
+        img = _apply_exif_orientation(img, orient)
     return img
 
 
 def _validate_domain(domain: Optional[str]) -> Optional[str]:
-    if domain in (None, "", "default"):
+    if domain in (None, "", "default", "print", "printed"):
         return None
     if domain not in ALLOWED_DOMAINS:
         raise HTTPException(
@@ -175,6 +225,14 @@ async def list_models(request: Request, caller_name: Optional[str] = Depends(_re
         "kramarky": {
             "ocr_model":    cfg.kramarky_ocr_model,
             "layout_model": cfg.kramarky_layout_model,
+        },
+        "handwritten": {
+            "ocr_model":    cfg.handwritten_ocr_model,
+            "layout_model": cfg.handwritten_layout_model,
+        },
+        "kurrent": {
+            "ocr_model":    cfg.kurrent_ocr_model,
+            "layout_model": cfg.kurrent_layout_model,
         },
         "available": {
             "ocr_models":    [f for f in onnx_files if "rec-" in f],

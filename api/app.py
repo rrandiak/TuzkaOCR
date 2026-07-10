@@ -78,26 +78,33 @@ class BodySizeLimitMiddleware:
 
 
 class ProcessorCache:
+    DOMAIN_MODELS = {
+        "kramarky":    ("kramarky_layout_model", "kramarky_ocr_model", 0.0, False),
+        "handwritten": ("handwritten_layout_model", "handwritten_ocr_model", 0.3, True),
+        "kurrent":     ("kurrent_layout_model", "kurrent_ocr_model", 0.3, True),
+    }
+
     def __init__(self, default: PageProcessor, base_cfg: Config):
         self._default = default
         self._base_cfg = base_cfg
-        self._kramarky: Optional[PageProcessor] = None
+        self._by_domain: dict[str, PageProcessor] = {}
         self._lock = threading.Lock()
 
     def get(self, domain: Optional[str] = None) -> PageProcessor:
-        if domain in (None, ""):
-            return self._default
-        if domain != "kramarky":
+        if domain not in self.DOMAIN_MODELS:
             return self._default
         with self._lock:
-            if self._kramarky is None:
+            if domain not in self._by_domain:
+                layout_field, ocr_field, ext, colsplit = self.DOMAIN_MODELS[domain]
                 cfg = dataclasses.replace(
                     self._base_cfg,
-                    ocr_model=self._base_cfg.kramarky_ocr_model,
-                    layout_model=self._base_cfg.kramarky_layout_model,
+                    ocr_model=getattr(self._base_cfg, ocr_field),
+                    layout_model=getattr(self._base_cfg, layout_field),
+                    crop_endpoint_ext=ext,
+                    column_split=colsplit,
                 )
-                self._kramarky = PageProcessor(cfg)
-            return self._kramarky
+                self._by_domain[domain] = PageProcessor(cfg)
+            return self._by_domain[domain]
 
 
 def _validate_auth(cfg: Config) -> None:
@@ -177,7 +184,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app = FastAPI(
         title="tuzkaocr",
         description="OCR pipeline for scanned page and document images — ALTO XML or text output",
-        version="1.4.2",
+        version="1.5.0",
         lifespan=lifespan,
     )
 

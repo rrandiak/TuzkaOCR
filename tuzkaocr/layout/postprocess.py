@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 from scipy import ndimage as ndi
@@ -280,12 +280,83 @@ def _cluster_regions(lines: List[TextLine], sep_map: np.ndarray,
     return list(groups.values())
 
 
-def _assemble_regions(line_groups: List[List[TextLine]]) -> List[Region]:
+def _column_order(group: List[TextLine]) -> Optional[List[TextLine]]:
+    if len(group) < 6:
+        return None
+    xr = {id(ln): _line_x_range(ln) for ln in group}
+    x0 = min(r[0] for r in xr.values()); x1 = max(r[1] for r in xr.values())
+    W = x1 - x0
+    if W < 40:
+        return None
+    heights = [max(1.0, ln.heights[0] + ln.heights[1]) for ln in group]
+    median_h = float(np.median(heights))
+    spanning = {id(ln) for ln in group if (xr[id(ln)][1] - xr[id(ln)][0]) > 0.7 * W}
+    narrow = [ln for ln in group if id(ln) not in spanning]
+    if len(narrow) < 6:
+        return None
+
+    ys = sorted((min(p[1] for p in ln.baseline), max(p[1] for p in ln.baseline), id(ln))
+                for ln in narrow)
+    overlapping = set()
+    for a in range(len(ys)):
+        for b in range(a + 1, len(ys)):
+            if ys[b][0] > ys[a][1]:
+                break
+            overlapping.add(ys[a][2]); overlapping.add(ys[b][2])
+    if len(overlapping) < 0.6 * len(narrow):
+        return None
+
+    centers = sorted((0.5 * (xr[id(ln)][0] + xr[id(ln)][1]), id(ln)) for ln in narrow)
+    gap_thr = max(1.5 * median_h, 0.08 * W)
+    clusters = [[centers[0]]]
+    for c in centers[1:]:
+        if c[0] - clusters[-1][-1][0] > gap_thr:
+            clusters.append([])
+        clusters[-1].append(c)
+    clusters = [c for c in clusters if len(c) >= max(3, 0.15 * len(narrow))]
+    if len(clusters) < 2:
+        return None
+    col_idx = {lid: ci for ci, cl in enumerate(clusters) for _, lid in cl}
+    if len(col_idx) < 0.8 * len(narrow):
+        return None
+    spans = []
+    for cl in clusters:
+        lids = [lid for _, lid in cl]
+        spans.append((min(xr[l][0] for l in lids), max(xr[l][1] for l in lids)))
+    for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+        inter = max(0, min(a1, b1) - max(b0, a0))
+        if inter > 0.4 * max(1, min(a1 - a0, b1 - b0)):
+            return None
+
+    def col_of(ln):
+        lid = id(ln)
+        if lid in col_idx:
+            return col_idx[lid]
+        c = 0.5 * (xr[lid][0] + xr[lid][1])
+        return min(range(len(clusters)),
+                   key=lambda ci: abs(np.mean([x for x, _ in clusters[ci]]) - c))
+
+    ordered_y = sorted(group, key=_line_center_y)
+    band = 0
+    key = {}
+    for ln in ordered_y:
+        if id(ln) in spanning:
+            band += 1
+            key[id(ln)] = (band, -1, _line_center_y(ln))
+            band += 1
+        else:
+            key[id(ln)] = (band, col_of(ln), _line_center_y(ln))
+    return sorted(group, key=lambda ln: key[id(ln)])
+
+
+def _assemble_regions(line_groups: List[List[TextLine]],
+                      column_split: bool = False) -> List[Region]:
     regions = []
     for group in line_groups:
         if not group:
             continue
-        ordered = sorted(group, key=_line_center_y)
+        ordered = (_column_order(group) if column_split else None) \
+            or sorted(group, key=_line_center_y)
         regions.append(Region(lines=ordered, polygon=_region_hull(ordered)))
     return regions
 
@@ -390,13 +461,14 @@ def _order_regions(regions: List[Region]) -> List[Region]:
     return out
 
 
-def maps_to_regions(maps: np.ndarray, page_gray: np.ndarray = None) -> List[Region]:
+def maps_to_regions(maps: np.ndarray, page_gray: np.ndarray = None,
+                    column_split: bool = False) -> List[Region]:
     lines = _extract_lines(maps)
     if not lines:
         return []
     sep_map = np.maximum(maps[:, :, 4], 0)
     lines = _merge_line_fragments(lines, sep_map)
     groups = _cluster_regions(lines, sep_map)
-    regions = _assemble_regions(groups)
+    regions = _assemble_regions(groups, column_split=column_split)
     regions = [r2 for r in regions for r2 in _split_bridged_columns(r, sep_map)]
     return _order_regions(regions)

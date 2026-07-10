@@ -40,7 +40,7 @@ def main() -> None:
     p.add_argument("--batch",    action="store_true", help="Process all images in a directory")
     p.add_argument("--workers",  type=int, default=2, help="Parallel page workers (batch)")
 
-    p.add_argument("--domain",       choices=["default", "kramarky"], default="default",
+    p.add_argument("--domain",       choices=["default", "print", "kramarky", "handwritten", "kurrent"], default="default",
                    help="Preset model pair; --layout-model/--ocr-model override individual slots")
     p.add_argument("--layout-model", default=None,
                    help="Override layout model (bundled filename or path); default depends on --domain")
@@ -72,6 +72,12 @@ def main() -> None:
     if args.domain == "kramarky":
         domain_layout = _base.kramarky_layout_model
         domain_ocr    = _base.kramarky_ocr_model
+    elif args.domain == "handwritten":
+        domain_layout = _base.handwritten_layout_model
+        domain_ocr    = _base.handwritten_ocr_model
+    elif args.domain == "kurrent":
+        domain_layout = _base.kurrent_layout_model
+        domain_ocr    = _base.kurrent_ocr_model
     else:
         domain_layout = _base.layout_model
         domain_ocr    = _base.ocr_model
@@ -87,6 +93,8 @@ def main() -> None:
         height_scale  = args.height_scale,
         adaptive_downsample = args.adaptive,
         role_classifier = args.role_classifier,
+        crop_endpoint_ext = (0.3 if args.domain in ("handwritten", "kurrent") else 0.0),
+        column_split = args.domain in ("handwritten", "kurrent"),
     )
 
     if not args.batch:

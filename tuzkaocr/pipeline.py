@@ -28,7 +28,7 @@ _BACKBONE_STRIDE = 2
 
 
 def _extract_crop(img_bgr: np.ndarray, baseline: list, asc: float, desc: float,
-                  ds: float = 3.0) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+                  ds: float = 3.0, endpoint_ext: float = 0.0) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     if baseline is None or len(baseline) < 1:
         return None, None
 
@@ -52,7 +52,7 @@ def _extract_crop(img_bgr: np.ndarray, baseline: list, asc: float, desc: float,
     norm   = max(1e-9, np.hypot(vx, vy))
     dx, dy = vx / norm, vy / norm
     px, py = dy, -dx
-    half_w = line_w / 2.0
+    half_w = line_w / 2.0 + endpoint_ext * total_h
 
     src = np.array([
         [cx - half_w * dx + asc_px  * px, cy - half_w * dy + asc_px  * py],
@@ -61,7 +61,7 @@ def _extract_crop(img_bgr: np.ndarray, baseline: list, asc: float, desc: float,
         [cx - half_w * dx - desc_px * px, cy - half_w * dy - desc_px * py],
     ], dtype=np.float32)
 
-    dst_h, dst_w = int(round(total_h)), line_w
+    dst_h, dst_w = int(round(total_h)), int(round(line_w + 2 * endpoint_ext * total_h))
     dst = np.array([[0, 0], [dst_w, 0], [dst_w, dst_h], [0, dst_h]], dtype=np.float32)
 
     M = cv2.getPerspectiveTransform(dst, src)
@@ -173,6 +173,7 @@ class PageProcessor:
             device=device_str,
             threads=config.ocr_threads,
             cpu_mem_arena=config.cpu_mem_arena,
+            column_split=getattr(config, "column_split", False),
         )
         self.recognizer = OnnxRecognizer(
             str(ocr_path),
@@ -201,7 +202,8 @@ class PageProcessor:
             _pitch_calibrate(region.lines)
             for line in region.lines:
                 gray, M = _extract_crop(img_bgr, line.baseline,
-                                        line.heights[0] * hs, line.heights[1] * hs, ds=img_scale)
+                                        line.heights[0] * hs, line.heights[1] * hs, ds=img_scale,
+                                        endpoint_ext=self.config.crop_endpoint_ext)
                 if gray is None:
                     continue
                 line_data.append(_LineInput(gray=gray, M=M, region_idx=ri))

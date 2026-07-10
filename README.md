@@ -59,6 +59,20 @@ dec-A-v3k5.onnx
 rec-E-v4k7.int8.onnx
 ```
 
+Handwritten models (`domain=handwritten`, Czech handwriting):
+
+```text
+dec-B-v2h.onnx
+rec-H-v4.int8.onnx
+```
+
+Kurrent models (`domain=kurrent`, German Kurrent/Sütterlin script):
+
+```text
+dec-B-v2h.onnx
+rec-H-v3h-kurrent.int8.onnx
+```
+
 The resulting ALTO XML records the layout and recognition models as two `<OCRProcessing>` elements (`IdLayout` / `IdRecognition`, each with an `<ocrProcessingStep>` whose `<processingStepDescription>` is `layout` / `recognition`), so downstream consumers see the explicit provenance pair, e.g. `dec-B-v2` + `rec-E-v5.int8` for default, or `dec-A-v3k5` + `rec-E-v4k7.int8` for Kramarky.
 
 ## Platform support
@@ -95,7 +109,7 @@ curl http://localhost:8000/healthz
 
 ## API Usage
 
-Per-request form fields: `image` (file), `domain` (`kramarky` or omitted), `fmt` (`alto`, `txt`, or `multi`), `role_classifier` (bool, optional). With `fmt=multi` the server produces both ALTO XML and plain text from a single OCR pass; choose which to download with the `?which=alto|txt` query parameter on the result endpoint (defaults to `alto`). The server picks model files from its own configuration — clients cannot supply model paths. Submitting more than `TUZKAOCR_MAX_QUEUE` simultaneous jobs returns **503** with a `Retry-After` header.
+Per-request form fields: `image` (file), `domain` (`kramarky`, `handwritten`, `kurrent`, or omitted for printed), `fmt` (`alto`, `txt`, or `multi`), `role_classifier` (bool, optional). With `fmt=multi` the server produces both ALTO XML and plain text from a single OCR pass; choose which to download with the `?which=alto|txt` query parameter on the result endpoint (defaults to `alto`). The server picks model files from its own configuration — clients cannot supply model paths. Submitting more than `TUZKAOCR_MAX_QUEUE` simultaneous jobs returns **503** with a `Retry-After` header.
 
 Submit an image for ALTO XML output:
 

@@ -36,13 +36,21 @@ class Config:
     kramarky_layout_model: str = field(default_factory=lambda: _env("KRAMARKY_LAYOUT_MODEL", "dec-A-v3k5.onnx"))
     kramarky_ocr_model:    str = field(default_factory=lambda: _env("KRAMARKY_OCR_MODEL",    "rec-E-v4k7.int8.onnx"))
 
+    handwritten_layout_model: str = field(default_factory=lambda: _env("HANDWRITTEN_LAYOUT_MODEL", "dec-B-v2h.onnx"))
+    handwritten_ocr_model:    str = field(default_factory=lambda: _env("HANDWRITTEN_OCR_MODEL",    "rec-H-v4.int8.onnx"))
+
+    kurrent_layout_model: str = field(default_factory=lambda: _env("KURRENT_LAYOUT_MODEL", "dec-B-v2h.onnx"))
+    kurrent_ocr_model:    str = field(default_factory=lambda: _env("KURRENT_OCR_MODEL",    "rec-H-v3h-kurrent.int8.onnx"))
+
     device:       str   = field(default_factory=lambda: _env("DEVICE",       "cpu"))
     ocr_threads:  int   = field(default_factory=lambda: _env("OCR_THREADS",  4))
     line_workers: int   = field(default_factory=lambda: _env("LINE_WORKERS", 4))
     page_workers: int   = field(default_factory=lambda: _env("PAGE_WORKERS", 2))
 
     height_scale: float = field(default_factory=lambda: _env("HEIGHT_SCALE", 1.0))
-    max_width:    int   = field(default_factory=lambda: _env("MAX_WIDTH",    1600))
+    max_width:    int   = field(default_factory=lambda: _env("MAX_WIDTH",    3400))
+    crop_endpoint_ext: float = field(default_factory=lambda: _env("CROP_ENDPOINT_EXT", 0.0))
+    column_split:      bool  = field(default_factory=lambda: _env("COLUMN_SPLIT", False))
 
     adaptive_downsample: bool = field(default_factory=lambda: _env("ADAPTIVE_DOWNSAMPLE", True))
     
