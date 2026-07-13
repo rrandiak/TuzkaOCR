@@ -55,7 +55,7 @@ vocab.json
 Kramarky models:
 
 ```text
-dec-A-v3k5.onnx
+dec-B-v1k.onnx
 rec-E-v4k7.int8.onnx
 ```
 
@@ -73,7 +73,7 @@ dec-B-v2h.onnx
 rec-H-v3h-kurrent.int8.onnx
 ```
 
-The resulting ALTO XML records the layout and recognition models as two `<OCRProcessing>` elements (`IdLayout` / `IdRecognition`, each with an `<ocrProcessingStep>` whose `<processingStepDescription>` is `layout` / `recognition`), so downstream consumers see the explicit provenance pair, e.g. `dec-B-v2` + `rec-E-v5.int8` for default, or `dec-A-v3k5` + `rec-E-v4k7.int8` for Kramarky.
+The resulting ALTO XML records the layout and recognition models as two `<OCRProcessing>` elements (`IdLayout` / `IdRecognition`, each with an `<ocrProcessingStep>` whose `<processingStepDescription>` is `layout` / `recognition`), so downstream consumers see the explicit provenance pair, e.g. `dec-B-v2` + `rec-E-v5.int8` for default, or `dec-B-v1k` + `rec-E-v4k7.int8` for Kramarky.
 
 ## Platform support
 

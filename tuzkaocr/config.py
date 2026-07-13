@@ -33,7 +33,7 @@ class Config:
     ocr_model:    str = field(default_factory=lambda: _env("OCR_MODEL",    "rec-E-v5.int8.onnx"))
     vocab:        str = field(default_factory=lambda: _env("VOCAB",        "vocab.json"))
 
-    kramarky_layout_model: str = field(default_factory=lambda: _env("KRAMARKY_LAYOUT_MODEL", "dec-A-v3k5.onnx"))
+    kramarky_layout_model: str = field(default_factory=lambda: _env("KRAMARKY_LAYOUT_MODEL", "dec-B-v1k.onnx"))
     kramarky_ocr_model:    str = field(default_factory=lambda: _env("KRAMARKY_OCR_MODEL",    "rec-E-v4k7.int8.onnx"))
 
     handwritten_layout_model: str = field(default_factory=lambda: _env("HANDWRITTEN_LAYOUT_MODEL", "dec-B-v2h.onnx"))
