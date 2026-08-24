@@ -8,15 +8,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-pip python3.11-dev \
+        software-properties-common ca-certificates \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-venv \
         libglib2.0-0 libgl1 \
-    && ln -sf python3.11 /usr/bin/python3 \
-    && ln -sf pip3 /usr/bin/pip \
+    && python3.11 -m venv /opt/tuzkaocr-venv \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/tuzkaocr-venv/bin:${PATH}"
 
 COPY requirements.txt .
 RUN sed -i '/^onnxruntime==/d' requirements.txt \
-    && pip install --no-cache-dir -r requirements.txt onnxruntime-gpu==1.25.1
+    && python -m pip install --no-cache-dir -r requirements.txt onnxruntime-gpu==1.25.1
 
 COPY tuzkaocr/ tuzkaocr/
 COPY api/      api/
@@ -25,14 +29,16 @@ COPY tuzkaocr.env tuzkaocr.env
 
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app \
-    && mkdir -p /app/results /app/input \
-    && chown -R app:app /app
+    && mkdir -p /app/results /app/input /app/spool \
+    && chown -R app:app /app \
+    && chmod 0777 /app/spool
 
-VOLUME ["/app/results"]
+VOLUME ["/app/results", "/app/spool"]
 
 EXPOSE 8000
 
 ENV TUZKAOCR_RESULTS_DIR=/app/results \
+    TUZKAOCR_SPOOL_DIR=/app/spool \
     TUZKAOCR_DEVICE=cuda
 
 USER app

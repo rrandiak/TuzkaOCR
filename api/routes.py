@@ -2,24 +2,22 @@ from __future__ import annotations
 
 import tempfile
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 
-import cv2
-import numpy as np
 import yaml
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Security, UploadFile, File
 from fastapi.responses import PlainTextResponse
 from fastapi.security.api_key import APIKeyHeader
 
 from tuzkaocr import _models
-from tuzkaocr.jobs import JobStoreFull
+from tuzkaocr.images import ImageDecodeError, decode_image_path
+from tuzkaocr.jobs import JobInputError, JobStoreFull
 
 ALLOWED_DOMAINS = {"kramarky", "handwritten", "kurrent"}
 ALLOWED_FMTS = {"alto", "txt", "multi"}
 ALLOWED_WHICH = {"alto", "txt"}
-SPOOL_MAX_SIZE = 8 * 1024 * 1024
+SPOOL_PREFIX = "tuzkaocr-upload-"
 
 router = APIRouter()
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -80,70 +78,6 @@ def _require_key(request: Request, key: Optional[str] = Security(_api_key_header
     return None
 
 
-def _exif_orientation(data: bytes) -> int:
-    try:
-        if data[:2] != b"\xff\xd8":
-            return 1
-        i = 2
-        while i + 4 < len(data):
-            if data[i] != 0xFF:
-                return 1
-            marker = data[i + 1]
-            size = int.from_bytes(data[i + 2:i + 4], "big")
-            if marker == 0xE1 and data[i + 4:i + 10] == b"Exif\x00\x00":
-                t = i + 10
-                endian = "little" if data[t:t + 2] == b"II" else "big"
-                ifd = t + int.from_bytes(data[t + 4:t + 8], endian)
-                n = int.from_bytes(data[ifd:ifd + 2], endian)
-                for e in range(n):
-                    p = ifd + 2 + 12 * e
-                    if int.from_bytes(data[p:p + 2], endian) == 0x0112:
-                        return int.from_bytes(data[p + 8:p + 10], endian)
-                return 1
-            if marker in (0xD8, 0xD9) or (0xD0 <= marker <= 0xD7):
-                i += 2
-            else:
-                i += 2 + size
-        return 1
-    except Exception:
-        return 1
-
-
-def _apply_exif_orientation(img: np.ndarray, orient: int) -> np.ndarray:
-    if orient == 2:
-        return cv2.flip(img, 1)
-    if orient == 3:
-        return cv2.rotate(img, cv2.ROTATE_180)
-    if orient == 4:
-        return cv2.flip(img, 0)
-    if orient == 5:
-        return cv2.flip(cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE), 1)
-    if orient == 6:
-        return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-    if orient == 7:
-        return cv2.flip(cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE), 1)
-    if orient == 8:
-        return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    return img
-
-
-def _decode_image(data: bytes, max_pixels: int) -> np.ndarray:
-    arr = np.frombuffer(data, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(status_code=422, detail="Cannot decode image")
-    pixels = img.shape[0] * img.shape[1]
-    if pixels > max_pixels:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Image too large: {pixels} pixels exceeds limit of {max_pixels}",
-        )
-    orient = _exif_orientation(data)
-    if orient != 1:
-        img = _apply_exif_orientation(img, orient)
-    return img
-
-
 def _validate_domain(domain: Optional[str]) -> Optional[str]:
     if domain in (None, "", "default", "print", "printed"):
         return None
@@ -166,24 +100,58 @@ def _validate_fmt(fmt: Optional[str]) -> str:
     return fmt
 
 
-async def _read_upload(upload: UploadFile, spool_dir: Optional[str] = None) -> bytes:
-    spool = tempfile.SpooledTemporaryFile(
-        max_size=SPOOL_MAX_SIZE,
-        dir=spool_dir or None,
-    )
+def _spool_directory(spool_dir: Optional[str]) -> Path:
+    return Path(spool_dir) if spool_dir else Path(tempfile.gettempdir())
+
+
+def _unlink_spool(path: Path) -> None:
     try:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            spool.write(chunk)
-        spool.seek(0)
-        return spool.read()
-    finally:
-        spool.close()
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"[cleanup] failed to remove upload spool {path}: {exc}", flush=True)
 
 
-def _submit(request: Request, img: np.ndarray, page_id: str,
+def sweep_spool_files(spool_dir: Optional[str]) -> int:
+    directory = _spool_directory(spool_dir)
+    removed = 0
+    try:
+        paths = list(directory.glob(f"{SPOOL_PREFIX}*"))
+    except OSError:
+        return 0
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+async def _read_upload(upload: UploadFile, spool_dir: Optional[str] = None) -> Path:
+    directory = _spool_directory(spool_dir)
+    spool = tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=SPOOL_PREFIX,
+        dir=directory,
+        delete=False,
+    )
+    path = Path(spool.name)
+    try:
+        with spool:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                spool.write(chunk)
+            spool.flush()
+        return path
+    except Exception:
+        _unlink_spool(path)
+        raise
+
+
+def _submit(request: Request, spool_path: Path, page_id: str,
             domain: Optional[str],
             caller: Optional[str], fmt: Optional[str] = None,
             role_classifier: Optional[bool] = None) -> str:
@@ -191,18 +159,27 @@ def _submit(request: Request, img: np.ndarray, page_id: str,
     fmt = _validate_fmt(fmt)
     cache = request.app.state.cache
     store = request.app.state.store
+    max_image_pixels = request.app.state.config.max_image_pixels
     processor = cache.get(domain=domain)
 
     who = f"[{caller}] " if caller else ""
     print(f"{who}submitted job for {page_id!r} domain={domain or 'default'} fmt={fmt}", flush=True)
 
     def work():
+        try:
+            img = decode_image_path(spool_path, max_image_pixels)
+        except ImageDecodeError as exc:
+            raise JobInputError(str(exc)) from exc
         return processor.process(img, page_id=page_id, fmt=fmt,
                                  role_classifier=role_classifier, with_meta=True)
 
     result_ext = ".txt" if fmt == "txt" else ".xml"
     try:
-        return store.submit(work, result_ext=result_ext)
+        return store.submit(
+            work,
+            result_ext=result_ext,
+            cleanup_fn=lambda: _unlink_spool(spool_path),
+        )
     except JobStoreFull as exc:
         raise HTTPException(
             status_code=503,
@@ -257,11 +234,23 @@ async def _ingest_upload(request: Request, upload: UploadFile,
                          caller_name: Optional[str]) -> str:
     _reject_if_full(request)
     cfg = request.app.state.config
-    data = await _read_upload(upload, cfg.spool_dir)
-    img = _decode_image(data, cfg.max_image_pixels)
-    return _submit(request, img, upload.filename or "page",
-                   domain, caller=caller_name, fmt=fmt,
-                   role_classifier=role_classifier)
+    spool_path = await _read_upload(upload, cfg.spool_dir)
+    submitted = False
+    try:
+        job_id = _submit(
+            request,
+            spool_path,
+            upload.filename or "page",
+            domain,
+            caller=caller_name,
+            fmt=fmt,
+            role_classifier=role_classifier,
+        )
+        submitted = True
+        return job_id
+    finally:
+        if not submitted:
+            _unlink_spool(spool_path)
 
 
 @router.post("/api/v1/process")
@@ -305,7 +294,7 @@ def _result_response(store, job_id: str, which: Optional[str] = None) -> PlainTe
     job = store.get(job_id)
     if job is not None:
         if job.status == "failed":
-            raise HTTPException(status_code=500, detail=job.error or "Processing failed")
+            raise HTTPException(status_code=job.error_status, detail=job.error or "Processing failed")
         if job.status not in ("done", "queued", "running"):
             raise HTTPException(status_code=404, detail="Job not found")
         if job.status != "done":

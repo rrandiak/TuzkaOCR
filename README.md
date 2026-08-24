@@ -31,7 +31,7 @@ tuzkaocr/layout/     Layout detection and post-processing
 tuzkaocr/ocr/        ONNX OCR recognizer and vocabulary handling
 tuzkaocr/models/     Bundled layout and OCR model files (shipped in the wheel)
 results/             Runtime OCR outputs, mounted as persistent storage
-spool/               Disk-backed scratch for large uploads (Compose-mounted)
+spool/               Optional host scratch for non-Compose deployments
 cli.py               Command-line entry point
 Dockerfile           CPU container image
 Dockerfile.gpu       GPU container image
@@ -230,7 +230,7 @@ TUZKAOCR_ROLE_MODEL=role-H5.onnx    # bundled role classifier model
 TUZKAOCR_RESULTS_DIR=results        # stored API results
 TUZKAOCR_MAX_JOB_AGE_HOURS=24       # result cleanup age (in-memory jobs + disk files)
 TUZKAOCR_MAX_QUEUE=16               # max simultaneous queued+running jobs (503 above this)
-TUZKAOCR_SPOOL_DIR=                 # optional disk dir for large upload spill; empty = system /tmp
+TUZKAOCR_SPOOL_DIR=                 # upload spool directory; empty = system temp directory
 ```
 
 Result files older than `TUZKAOCR_MAX_JOB_AGE_HOURS` are removed on startup and once per hour. The sweep also covers orphaned files left over from previous server lifetimes, not just jobs currently tracked in memory.
@@ -316,12 +316,19 @@ Startup fails fast with a clear message if `TUZKAOCR_API_KEYS_FILE` points at a 
 
 ```text
 TUZKAOCR_MAX_UPLOAD_MB=256          # reject HTTP body over this size (413)
-TUZKAOCR_MAX_IMAGE_PIXELS=300000000 # reject decoded images over this pixel count (422)
+TUZKAOCR_MAX_IMAGE_PIXELS=300000000 # fail accepted API jobs over this decoded pixel count
 ```
 
-Defaults are generous to support large archival scans. Tune down for stricter deployments. Oversize uploads return a clean **413** for both `Content-Length`-known and chunked/streaming requests.
+Defaults are generous to support large archival scans. Tune down for stricter deployments. Oversize uploads return a clean **413** for both `Content-Length`-known and chunked/streaming requests. Corrupt or over-pixel-limit images are accepted asynchronously and become failed jobs; command-line processing has no API pixel limit.
 
-Uploads up to 8 MiB are held in memory; anything larger spills to disk under `TUZKAOCR_SPOOL_DIR` (or the system temp directory if unset). Under Docker Compose the bundled `./spool` bind-mount is used so the spool is real disk, not RAM-backed tmpfs.
+Every accepted upload is streamed to a uniquely named service-owned file under
+`TUZKAOCR_SPOOL_DIR` (or the system temp directory if unset). Its worker decodes it once;
+queued jobs never retain decoded page arrays. The file is removed after processing or a
+rejected submission. An explicitly configured spool directory is treated as private to
+one service instance and crash leftovers are cleared at startup; do not share it between
+bare-metal instances. The shared system temp directory is never swept.
+Docker Compose gives the CPU and GPU services separate disk-backed spool volumes so one
+service cannot interfere with the other's uploads.
 
 ### Memory
 
@@ -331,12 +338,13 @@ the model files themselves (3 MB) and decoded pages (~10 MB) are negligible by c
 A rough sizing guide:
 
 ```text
-peak ≈ 0.1 GiB  +  PAGE_WORKERS × ~1.3 GiB  +  MAX_QUEUE × ~8 MiB  +  scratch
+peak ≈ 0.1 GiB  +  PAGE_WORKERS × ~1.3 GiB  +  scratch
 ```
 
-So the lever is `TUZKAOCR_PAGE_WORKERS`, not the queue depth (each queued job costs only
-~8 MiB). For tight memory limits, prefer **one page worker per engine and scale out by
-engine count** rather than packing more workers into one engine.
+`TUZKAOCR_MAX_QUEUE` limits queued plus running jobs. Queued uploads remain encoded on
+disk, so `TUZKAOCR_PAGE_WORKERS` is the main memory-control lever. For tight memory
+limits, prefer **one page worker per engine and scale out by engine count** rather than
+packing more workers into one engine.
 
 `TUZKAOCR_CPU_MEM_ARENA` (default `true`) controls ONNX Runtime's CPU memory arena:
 
@@ -356,7 +364,7 @@ tmpfs — tmpfs counts against the container memory limit.
 ## Production Notes
 
 - Keep `results/` on persistent storage.
-- Point `TUZKAOCR_SPOOL_DIR` at a real disk volume (the bundled Compose setup uses `./spool`). If the spool ends up on a tmpfs / RAM-backed filesystem, large uploads consume memory instead of disk.
+- Point `TUZKAOCR_SPOOL_DIR` at real disk storage. The bundled Compose setup uses separate named volumes for CPU and GPU. If the spool ends up on a tmpfs / RAM-backed filesystem, large uploads consume memory instead of disk.
 - Run behind a reverse proxy or ingress that provides TLS.
 - Enable API-key authentication for any non-local deployment.
 - Tune `TUZKAOCR_PAGE_WORKERS`, `TUZKAOCR_LINE_WORKERS`, and `TUZKAOCR_OCR_THREADS` for the target CPU/GPU capacity.

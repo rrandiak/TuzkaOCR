@@ -1,0 +1,23 @@
+# Version control
+.git
+.gitignore
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local runtime output
+results/
+spool/
+
+# Docker / dev files not needed inside the image
+Dockerfile
+Dockerfile.gpu
+docker-compose.yml
+.dockerignore
+
+# Secrets / local config
+api_keys.yaml
+api_keys.example.yaml

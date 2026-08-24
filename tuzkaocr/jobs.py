@@ -22,11 +22,17 @@ class Job:
     finished_at: Optional[datetime] = None
     result_paths: list[Path] = field(default_factory=list)
     error: Optional[str] = None
+    error_status: int = 500
     mean_conf: Optional[float] = None
     n_lines: Optional[int] = None
+    cleanup_fn: Optional[Callable[[], None]] = field(default=None, repr=False, compare=False)
 
 
 class JobStoreFull(Exception):
+    pass
+
+
+class JobInputError(Exception):
     pass
 
 
@@ -49,25 +55,67 @@ class JobStore:
         return sum(1 for j in self._jobs.values()
                    if j.status in ("queued", "running"))
 
-    def submit(self, process_fn: Callable[[], object], result_ext: str = ".xml") -> str:
+    def submit(self, process_fn: Callable[[], object], result_ext: str = ".xml",
+               *, cleanup_fn: Optional[Callable[[], None]] = None) -> str:
         with self._lock:
             active = self._active_count()
             if active >= self._max_queue:
-                raise JobStoreFull(
-                    f"queue full ({active}/{self._max_queue})"
-                )
+                raise JobStoreFull(f"queue full ({active}/{self._max_queue})")
             job_id = str(uuid.uuid4())
-            self._jobs[job_id] = Job(id=job_id, status="queued")
-        self._executor.submit(self._run, job_id, process_fn, result_ext)
+            job = Job(
+                id=job_id,
+                status="queued",
+                cleanup_fn=cleanup_fn,
+            )
+            self._jobs[job_id] = job
+        try:
+            self._executor.submit(self._run, job_id, process_fn, result_ext)
+        except Exception:
+            with self._lock:
+                self._jobs.pop(job_id, None)
+            if cleanup_fn:
+                cleanup_fn()
+            raise
         return job_id
+
+    def _cleanup_job_upload(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            cleanup_fn = job.cleanup_fn if job else None
+            if job:
+                job.cleanup_fn = None
+        if cleanup_fn:
+            try:
+                cleanup_fn()
+            except Exception as exc:
+                print(f"[cleanup] failed to remove upload spool: {exc}", flush=True)
+
+    def _finish(self, job_id: str, *, status: Literal["done", "failed"],
+                error: Optional[str] = None, paths: Optional[list[Path]] = None,
+                meta: Optional[dict] = None, error_status: int = 500) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status in ("done", "failed"):
+                return False
+            job.status = status
+            job.finished_at = datetime.now(timezone.utc)
+            if status == "done":
+                job.result_paths = paths or []
+                job.mean_conf = (meta or {}).get("mean_conf")
+                job.n_lines = (meta or {}).get("n_lines")
+            else:
+                job.error = error
+                job.error_status = error_status
+            return True
 
     def _run(self, job_id: str, process_fn: Callable[[], object],
              result_ext: str = ".xml") -> None:
         with self._lock:
             job = self._jobs.get(job_id)
-            if job:
-                job.status = "running"
-                job.started_at = datetime.now(timezone.utc)
+            if job is None or job.status != "queued":
+                return
+            job.status = "running"
+            job.started_at = datetime.now(timezone.utc)
         try:
             result = process_fn()
             meta: dict = {}
@@ -86,21 +134,18 @@ class JobStore:
                 p = self._results_dir / f"{job_id}{result_ext}"
                 p.write_text(result, encoding="utf-8")
                 paths.append(p)
-            with self._lock:
-                job = self._jobs.get(job_id)
-                if job:
-                    job.status       = "done"
-                    job.finished_at  = datetime.now(timezone.utc)
-                    job.result_paths = paths
-                    job.mean_conf    = meta.get("mean_conf")
-                    job.n_lines      = meta.get("n_lines")
+            if not self._finish(job_id, status="done", paths=paths, meta=meta):
+                for path in paths:
+                    path.unlink(missing_ok=True)
+        except JobInputError as exc:
+            self._finish(job_id, status="failed", error=str(exc), error_status=422)
         except Exception as exc:
-            with self._lock:
-                job = self._jobs.get(job_id)
-                if job:
-                    job.status = "failed"
-                    job.finished_at = datetime.now(timezone.utc)
-                    job.error = str(exc)
+            self._finish(job_id, status="failed", error=str(exc))
+        except BaseException as exc:
+            self._finish(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            self._cleanup_job_upload(job_id)
 
     def has_capacity(self) -> bool:
         with self._lock:
@@ -141,17 +186,32 @@ class JobStore:
     def cleanup(self) -> int:
         cutoff = datetime.now(timezone.utc) - self._max_age
         removed = 0
+        expired: list[tuple[Job, Optional[Callable[[], None]]]] = []
         with self._lock:
-            to_delete = [
-                jid for jid, job in self._jobs.items()
-                if job.created_at < cutoff
-            ]
-            for jid in to_delete:
-                job = self._jobs.pop(jid)
-                for p in job.result_paths:
-                    if p.exists():
-                        p.unlink(missing_ok=True)
-                removed += 1
+            for job_id, job in list(self._jobs.items()):
+                if job.created_at >= cutoff:
+                    continue
+                if job.status == "queued":
+                    self._finish(
+                        job_id,
+                        status="failed",
+                        error="Job exceeded maximum age before starting",
+                    )
+                    removed_job = self._jobs.pop(job_id)
+                    expired.append((removed_job, removed_job.cleanup_fn))
+                elif job.status in ("done", "failed"):
+                    removed_job = self._jobs.pop(job_id)
+                    expired.append((removed_job, removed_job.cleanup_fn))
+        for job, cleanup_fn in expired:
+            if cleanup_fn:
+                try:
+                    cleanup_fn()
+                except Exception as exc:
+                    print(f"[cleanup] failed to remove upload spool: {exc}", flush=True)
+            for p in job.result_paths:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+            removed += 1
         removed += self._sweep_orphans()
         return removed
 

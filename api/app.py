@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import tempfile
 import threading
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -14,7 +15,15 @@ from tuzkaocr.config import Config
 from tuzkaocr.pipeline import PageProcessor
 from tuzkaocr.jobs import JobStore
 
-from api.routes import router
+from api.routes import router, sweep_spool_files
+
+
+def _validate_spool(spool_dir: str) -> None:
+    try:
+        with tempfile.NamedTemporaryFile(dir=spool_dir or None):
+            pass
+    except OSError as exc:
+        raise RuntimeError(f"TUZKAOCR_SPOOL_DIR={spool_dir!r} is not writable: {exc}") from exc
 
 
 class BodySizeLimitMiddleware:
@@ -142,21 +151,38 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     store: JobStore | None = None
     cleanup_timer: threading.Timer | None = None
+    stopping = False
+
+    def _run_periodic_cleanup():
+        nonlocal cleanup_timer
+        try:
+            if store:
+                removed = store.cleanup()
+                if removed:
+                    print(f"[cleanup] processed {removed} expired job(s)", flush=True)
+        except Exception as exc:
+            print(f"[cleanup] periodic cleanup failed: {exc}", flush=True)
+        finally:
+            if not stopping:
+                cleanup_timer = threading.Timer(3600, _run_periodic_cleanup)
+                cleanup_timer.daemon = True
+                cleanup_timer.start()
 
     def _schedule_cleanup():
         nonlocal cleanup_timer
-        if store:
-            removed = store.cleanup()
-            if removed:
-                print(f"[cleanup] removed {removed} expired job(s)", flush=True)
-        cleanup_timer = threading.Timer(3600, _schedule_cleanup)
+        cleanup_timer = threading.Timer(3600, _run_periodic_cleanup)
         cleanup_timer.daemon = True
         cleanup_timer.start()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal store, cleanup_timer
+        nonlocal store, cleanup_timer, stopping
+        stopping = False
         _validate_auth(cfg)
+        _validate_spool(cfg.spool_dir)
+        swept_spool = sweep_spool_files(cfg.spool_dir) if cfg.spool_dir else 0
+        if swept_spool:
+            print(f"[cleanup] removed {swept_spool} orphaned upload spool file(s) on startup", flush=True)
         print("Loading models...", flush=True)
         default_processor = PageProcessor(cfg)
         cache = ProcessorCache(default_processor, cfg)
@@ -172,6 +198,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         _schedule_cleanup()
         print("Ready.", flush=True)
         yield
+        stopping = True
         if cleanup_timer:
             cleanup_timer.cancel()
         if store:

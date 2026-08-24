@@ -30,9 +30,11 @@ def _clamp(v, lo, hi):
 
 class RoleClassifier:
 
-    def __init__(self, onnx_path: str | Path, device: str = "cpu", threads: int = 4):
+    def __init__(self, onnx_path: str | Path, device: str = "cpu", threads: int = 4,
+                 cpu_mem_arena: bool = True):
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = threads
+        opts.enable_cpu_mem_arena = cpu_mem_arena
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == "cuda" else ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(str(onnx_path), sess_options=opts, providers=providers)
         self.classes = CLASSES

@@ -14,7 +14,7 @@ services:
       - "${TUZKAOCR_CPU_PORT:-8000}:8000"
     volumes:
       - ./results:/app/results
-      - ./spool:/app/spool
+      - cpu_spool:/app/spool
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"]
       interval: 30s
@@ -42,7 +42,7 @@ services:
       - "${TUZKAOCR_GPU_PORT:-8001}:8000"
     volumes:
       - ./results:/app/results
-      - ./spool:/app/spool
+      - gpu_spool:/app/spool
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"]
       interval: 30s
@@ -61,3 +61,7 @@ services:
       - no-new-privileges:true
     stop_grace_period: 120s
     profiles: [gpu]
+
+volumes:
+  cpu_spool:
+  gpu_spool:

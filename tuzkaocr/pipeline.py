@@ -10,6 +10,7 @@ import numpy as np
 
 from . import _models
 from .config import Config
+from .images import decode_image_path
 from .layout.detector import LayoutDetector
 from .layout import adaptive
 from .layout.role import RoleClassifier
@@ -105,14 +106,6 @@ def _word_bbox(t_start: int, t_end: int, crop_w: int,
     return _bbox_from_quad(x1, 0, x2, _TARGET_H, M_scaled)
 
 
-def ensure_bgr(img: np.ndarray) -> np.ndarray:
-    if img.ndim == 2:
-        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    if img.shape[2] == 4:
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-    return img
-
-
 def _pitch_calibrate(lines) -> None:
     if len(lines) < 3:
         return
@@ -163,6 +156,7 @@ class PageProcessor:
     def __init__(self, config: Config):
         self.config = config
         device_str = config.resolve_device()
+        self._device = device_str
 
         layout_path = _models.resolve(config.layout_model)
         ocr_path    = _models.resolve(config.ocr_model)
@@ -273,7 +267,8 @@ class PageProcessor:
         if use_role:
             if self._role is None:
                 self._role = RoleClassifier(str(_models.resolve(cfg.role_model)),
-                                            device=cfg.device, threads=cfg.ocr_threads)
+                                            device=self._device, threads=cfg.ocr_threads,
+                                            cpu_mem_arena=cfg.cpu_mem_arena)
             self._role.classify_blocks(blocks, img_bgr)
 
         return img_h, img_w, blocks, float(chosen["mean_conf"])
@@ -304,10 +299,7 @@ class PageProcessor:
     def process_file(self, image_path: str | Path, out_path: str | Path | None = None,
                      fmt: str = "alto"):
         img_path = Path(image_path)
-        img = cv2.imread(str(img_path))
-        if img is None:
-            raise ValueError(f"Cannot read image: {img_path}")
-        img = ensure_bgr(img)
+        img = decode_image_path(img_path)
 
         result = self.process(img, page_id=img_path.stem, fmt=fmt)
 

@@ -20,14 +20,16 @@ COPY tuzkaocr.env tuzkaocr.env
 
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app \
-    && mkdir -p /app/results /app/input \
-    && chown -R app:app /app
+    && mkdir -p /app/results /app/input /app/spool \
+    && chown -R app:app /app \
+    && chmod 0777 /app/spool
 
-VOLUME ["/app/results"]
+VOLUME ["/app/results", "/app/spool"]
 
 EXPOSE 8000
 
-ENV TUZKAOCR_RESULTS_DIR=/app/results
+ENV TUZKAOCR_RESULTS_DIR=/app/results \
+    TUZKAOCR_SPOOL_DIR=/app/spool
 
 USER app
 
