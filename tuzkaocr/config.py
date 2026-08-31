@@ -37,10 +37,10 @@ class Config:
     kramarky_ocr_model:    str = field(default_factory=lambda: _env("KRAMARKY_OCR_MODEL",    "rec-E-v4k7.int8.onnx"))
 
     handwritten_layout_model: str = field(default_factory=lambda: _env("HANDWRITTEN_LAYOUT_MODEL", "dec-B-v2h.onnx"))
-    handwritten_ocr_model:    str = field(default_factory=lambda: _env("HANDWRITTEN_OCR_MODEL",    "rec-H-v4.int8.onnx"))
+    handwritten_ocr_model:    str = field(default_factory=lambda: _env("HANDWRITTEN_OCR_MODEL",    "rec-H-v6.int8.onnx"))
 
     kurrent_layout_model: str = field(default_factory=lambda: _env("KURRENT_LAYOUT_MODEL", "dec-B-v2h.onnx"))
-    kurrent_ocr_model:    str = field(default_factory=lambda: _env("KURRENT_OCR_MODEL",    "rec-H-v3h-kurrent.int8.onnx"))
+    kurrent_ocr_model:    str = field(default_factory=lambda: _env("KURRENT_OCR_MODEL",    "rec-H-v6.int8.onnx"))
 
     device:       str   = field(default_factory=lambda: _env("DEVICE",       "cpu"))
     ocr_threads:  int   = field(default_factory=lambda: _env("OCR_THREADS",  4))

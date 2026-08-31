@@ -63,17 +63,20 @@ Handwritten models (`domain=handwritten`, Czech handwriting):
 
 ```text
 dec-B-v2h.onnx
-rec-H-v4.int8.onnx
+rec-H-v6.int8.onnx
 ```
 
 Kurrent models (`domain=kurrent`, German Kurrent/Sütterlin script):
 
 ```text
 dec-B-v2h.onnx
-rec-H-v3h-kurrent.int8.onnx
+rec-H-v6.int8.onnx
 ```
 
-The resulting ALTO XML records the layout and recognition models as two `<OCRProcessing>` elements (`IdLayout` / `IdRecognition`, each with an `<ocrProcessingStep>` whose `<processingStepDescription>` is `layout` / `recognition`), so downstream consumers see the explicit provenance pair, e.g. `dec-B-v2` + `rec-E-v5.int8` for default, or `dec-B-v1k` + `rec-E-v4k7.int8` for Kramarky.
+`rec-H-v6` is a single general handwritten recognizer serving both
+`handwritten` and `kurrent`; it supersedes the earlier Kurrent-only specialist.
+
+The resulting ALTO XML records the layout and recognition models as two `<OCRProcessing>` elements (`IdLayout` / `IdRecognition`, each with an `<ocrProcessingStep>` whose `<processingStepDescription>` is `layout` / `recognition`), so downstream consumers see the explicit provenance pair, e.g. `dec-B-v2` + `rec-E-v5.int8` for default, `dec-B-v1k` + `rec-E-v4k7.int8` for Kramarky, or `dec-B-v2h` + `rec-H-v6.int8` for handwritten and Kurrent.
 
 ## Platform support
 
