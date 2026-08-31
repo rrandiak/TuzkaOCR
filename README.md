@@ -226,6 +226,9 @@ TUZKAOCR_OCR_THREADS=4              # ONNX intra-op threads
 TUZKAOCR_LINE_WORKERS=4             # OCR threads per page
 TUZKAOCR_PAGE_WORKERS=2             # API/background or batch workers
 TUZKAOCR_HEIGHT_SCALE=1.0           # line-height multiplier
+TUZKAOCR_MAX_WIDTH=3400             # max line-crop width fed to the recognizer, in px
+TUZKAOCR_CROP_ENDPOINT_EXT=0.0      # extend line crops at both ends, as a fraction of line height
+TUZKAOCR_COLUMN_SPLIT=false         # true = order lines column-by-column within a region
 TUZKAOCR_ADAPTIVE_DOWNSAMPLE=true   # true = recover dense pages via adaptive downsampling
 TUZKAOCR_CPU_MEM_ARENA=true         # false = release RAM to OS between pages (see Memory below)
 TUZKAOCR_ROLE_CLASSIFIER=false      # true = tag each ALTO TextLine with role (body/heading/...)
@@ -239,6 +242,32 @@ TUZKAOCR_SPOOL_DIR=                 # upload spool directory; empty = system tem
 Result files older than `TUZKAOCR_MAX_JOB_AGE_HOURS` are removed on startup and once per hour. The sweep also covers orphaned files left over from previous server lifetimes, not just jobs currently tracked in memory.
 
 Bad values (e.g. `TUZKAOCR_PAGE_WORKERS=0`, an unknown device, a missing `SPOOL_DIR` path) are rejected at startup with a clear error before models load.
+
+### Model overrides
+
+Each domain resolves a layout model and a recognition model from configuration; clients
+cannot supply model paths. The defaults are the bundled files and normally need no
+changes:
+
+```text
+TUZKAOCR_LAYOUT_MODEL=dec-B-v2.onnx                 # printed (default domain)
+TUZKAOCR_OCR_MODEL=rec-E-v5.int8.onnx
+TUZKAOCR_KRAMARKY_LAYOUT_MODEL=dec-B-v1k.onnx       # domain=kramarky
+TUZKAOCR_KRAMARKY_OCR_MODEL=rec-E-v4k7.int8.onnx
+TUZKAOCR_HANDWRITTEN_LAYOUT_MODEL=dec-B-v2h.onnx    # domain=handwritten
+TUZKAOCR_HANDWRITTEN_OCR_MODEL=rec-H-v6.int8.onnx
+TUZKAOCR_KURRENT_LAYOUT_MODEL=dec-B-v2h.onnx        # domain=kurrent
+TUZKAOCR_KURRENT_OCR_MODEL=rec-H-v6.int8.onnx
+TUZKAOCR_VOCAB=vocab.json                           # shared recognizer character set
+```
+
+A value that names an existing file is used as given (`~` is expanded); otherwise its
+filename is looked up in the bundled `tuzkaocr/models/` directory. An unresolvable name
+fails at startup with a message listing what is bundled. Superseded model files stay
+bundled, so a pin to an older model keeps working after an upgrade — for example
+`TUZKAOCR_KURRENT_OCR_MODEL=rec-H-v3h-kurrent.int8.onnx` restores the pre-`rec-H-v6`
+Kurrent specialist. `TUZKAOCR_VOCAB` is shared by every recognizer and must match the
+models in use; override it only alongside a custom recognizer.
 
 ## Adaptive downsampling
 
