@@ -1,18 +1,29 @@
 """Central ONNX Runtime CUDA provider construction.
 
-On CUDA the ORT defaults grow GPU memory without bound as input shapes vary — and the OCR
-pipeline feeds a different page size almost every time:
-  - ``cudnn_conv_algo_search=EXHAUSTIVE`` (ORT default) benchmarks conv algorithms per unique
-    spatial shape and caches a workspace for each → the working set ratchets up per new size;
-  - ``arena_extend_strategy=kNextPowerOfTwo`` (default) over-reserves and never releases.
-Across a varied corpus this climbs to the VRAM ceiling and OOMs.
+These provider options are NOT the VRAM fix. Measurements (bench/GPU_OOM_INVESTIGATION.md §4)
+falsified every provider-option lever that was tried:
 
-``HEURISTIC`` conv search (and optionally a hard ``gpu_mem_limit``) bound it. The arena strategy
-depends on the model's shape profile, so it is set per session (see Config.cuda_provider_options):
-  - fixed-shape models (layout, role): ``kSameAsRequested`` — a few repeated shapes, allocate exactly;
-  - the recognizer: ``kNextPowerOfTwo`` — a different line width almost every call, so bucket sizes
-    into reusable blocks (``kSameAsRequested`` there leaks a block per width and OOMs on the GRU node).
-The values come from Config (env-overridable via TUZKAOCR_*), so the old behavior stays reproducible.
+  - ``cudnn_conv_algo_search``: EXHAUSTIVE vs HEURISTIC give an **identical** peak (441-shape
+    layout probe: 4886 MB both ways; re-confirmed on ORT 1.25.1, 64 shapes: 4848 MB both ways).
+    It is a speed knob only, with no effect on memory.
+  - ``cudnn_conv_use_max_workspace``: no effect (§4b). The large buffers in the failure logs are
+    real activations, not cuDNN scratch.
+  - ``arena_extend_strategy``: does not bound growth either (§4d) — and flipping everything to
+    kNextPowerOfTwo is actively worse on a full corpus, because power-of-two over-reservation
+    accumulates across distinct shapes and never flattens.
+
+What actually drives VRAM is that the arena **retains a block set per distinct input shape**
+(§7b) and that ``page_workers`` runs many inferences concurrently on that shared arena (§6).
+The two real levers both live in pipeline.py: per-run arena shrinkage (``gpu_arena_shrink``,
+which turns that retention into a transient — 4848 MB → 118 MB resident, measured) and the
+GPU-concurrency semaphore (``gpu_concurrency``).
+
+The committed arena split below is nonetheless correct and should be kept (§4d): layout/role use
+``kSameAsRequested``, the recognizer ``kNextPowerOfTwo``. That split measured best on the full
+corpus; the reasoning is empirical, not the per-width story an earlier version of this docstring
+told (§4c falsified that: the recognizer sits at ~164 MB under either strategy).
+
+Values come from Config (env-overridable via TUZKAOCR_*), so any config stays reproducible.
 """
 
 from __future__ import annotations

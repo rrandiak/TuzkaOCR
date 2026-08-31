@@ -224,7 +224,8 @@ class PageProcessor:
 
         # GPU-concurrency cap + per-run arena shrinkage keep VRAM bounded when page_workers runs
         # many inferences on the shared CUDA arena. CUDA-only: on CPU there's no VRAM to bound and
-        # serializing run() would only hurt. Both default-off -> no behavior change unless set.
+        # serializing run() would only hurt, so nothing here fires unless device is cuda.
+        # Shrinkage defaults ON (it fixes shape-driven retention); the cap defaults off/unlimited.
         self._gpu_sem = _gpu_semaphore(config.gpu_concurrency) if device_str == "cuda" else None
         self._gpu_shrink = config.gpu_arena_shrink and device_str == "cuda"
         if self._gpu_sem is not None or self._gpu_shrink:

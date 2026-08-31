@@ -56,34 +56,39 @@ class Config:
     
     cpu_mem_arena: bool = field(default_factory=lambda: _env("CPU_MEM_ARENA", True))
 
-    # CUDA memory bounding (see tuzkaocr/ort_session.py). Defaults chosen to keep GPU memory
-    # bounded across varied input shapes; the old (unbounded) behavior is EXHAUSTIVE +
-    # kNextPowerOfTwo. gpu_mem_limit_mb=0 leaves the arena uncapped.
-    #
-    # The two models have opposite allocation profiles, so they need different arena
-    # strategies:
-    #   - fixed-shape models (layout, role) see a few repeated shapes -> kSameAsRequested
-    #     allocates exactly what's needed with no over-reservation;
-    #   - the recognizer sees a different line width almost every call -> kSameAsRequested
-    #     would allocate an unreusable block per width and climb to a VRAM OOM (GRU node),
-    #     so it uses kNextPowerOfTwo, which buckets sizes into reusable blocks.
+    # CUDA provider options (see tuzkaocr/ort_session.py). These do NOT bound VRAM — that is
+    # gpu_arena_shrink + gpu_concurrency below. Measured in bench/GPU_OOM_INVESTIGATION.md §4:
+    #   - cudnn_conv_algo_search: EXHAUSTIVE and HEURISTIC give an identical peak (§4a). Speed
+    #     knob only; HEURISTIC is kept because it skips per-shape algo benchmarking on a corpus
+    #     where shapes rarely repeat.
+    #   - the layout/recognizer arena split is empirical (§4d): it measured best on the full
+    #     corpus, where all-kNextPowerOfTwo climbed to 13.8 GB and never flattened. Keep it.
+    #     (It is not, as once claimed, about the recognizer leaking a block per line width —
+    #     §4c: the recognizer sits at ~164 MB under either strategy.)
+    # gpu_mem_limit_mb=0 leaves the arena uncapped.
     cudnn_conv_algo_search:        str = field(default_factory=lambda: _env("CUDNN_CONV_ALGO_SEARCH", "HEURISTIC"))
     arena_extend_strategy:         str = field(default_factory=lambda: _env("ARENA_EXTEND_STRATEGY", "kSameAsRequested"))
     recognizer_arena_extend_strategy: str = field(default_factory=lambda: _env("RECOGNIZER_ARENA_EXTEND_STRATEGY", "kNextPowerOfTwo"))
     gpu_mem_limit_mb:              int = field(default_factory=lambda: _env("GPU_MEM_LIMIT_MB", 0))
 
     # Cap on concurrent GPU inferences, shared process-wide (see pipeline._gpu_semaphore).
-    # page_workers parallelizes CPU pre/post AND GPU inference; on CUDA a single layout+
-    # recognizer inference holds a large transient (~6-7 GB on full-page scans), so running
-    # page_workers of them concurrently exhausts VRAM. This bounds the GPU-resident set to
-    # `gpu_concurrency` inferences while page_workers keeps the CPU side busy. 0 = unlimited
-    # (old behavior). On CUDA set it to VRAM // per-inference-footprint (e.g. 1 on a 16 GB card).
+    # page_workers parallelizes CPU pre/post AND GPU inference, all on one shared ORT arena, so
+    # `page_workers` inferences hit VRAM at once (§6). This bounds that to `gpu_concurrency`
+    # while page_workers keeps the CPU side busy. 0 = unlimited (pre-fix behavior).
+    # With gpu_arena_shrink on, each extra concurrent inference costs only its live transient
+    # (~1.3-1.6 GB), not a retained block set (§9.1) -- so gc can go higher than it once could:
+    # the 16 GB box measured gc=4 as the throughput knee at ~2.8 GB peak (GPU_TUNING_AND_FIX §1).
     gpu_concurrency:              int = field(default_factory=lambda: _env("GPU_CONCURRENCY", 0))
 
     # Release unused GPU arena chunks after each inference (memory.enable_memory_arena_shrinkage,
-    # see pipeline._wrap_gpu_session). Keeps VRAM flat under high page_workers/gpu_concurrency at a
-    # ~6-7 % throughput cost; without it the fast (high-concurrency) configs OOM. CUDA only.
-    gpu_arena_shrink:             bool = field(default_factory=lambda: _env("GPU_ARENA_SHRINK", False))
+    # see pipeline._wrap_gpu_session). CUDA only; on CPU there is no VRAM to reclaim.
+    #
+    # This is the lever that fixes shape-driven growth. The arena otherwise retains a block set
+    # per distinct input shape and never releases it, so VRAM climbs as new page sizes arrive
+    # (§7b). Measured on ORT 1.25.1, 64 distinct layout shapes: 4848 MB retained without it vs
+    # 118 MB with it, at no measurable time cost in isolation (~6-7 % under a full pipeline).
+    # Default ON for CUDA per §8: opt out with TUZKAOCR_GPU_ARENA_SHRINK=0.
+    gpu_arena_shrink:             bool = field(default_factory=lambda: _env("GPU_ARENA_SHRINK", True))
 
     role_classifier: bool = field(default_factory=lambda: _env("ROLE_CLASSIFIER", False))
     role_model:      str  = field(default_factory=lambda: _env("ROLE_MODEL", "role-H5.onnx"))
