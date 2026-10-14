@@ -35,8 +35,8 @@ Invalid configuration:
 ```
 
 Rules: the thread, worker, size, and age counters must be greater than zero;
-`TUZKAOCR_DEVICE` must be `cpu`, `cuda`, or `auto`; `TUZKAOCR_HEIGHT_SCALE` must be between
-0.1 and 10.0; and `TUZKAOCR_SPOOL_DIR`, when set, must already exist and be writable.
+`TUZKAOCR_DEVICE` must be `cpu`, `cuda`, or `auto`; `TUZKAOCR_READING_ORDER` must be
+`columns` or `basic`; `TUZKAOCR_HEIGHT_SCALE` must be between 0.1 and 10.0; and `TUZKAOCR_SPOOL_DIR`, when set, must already exist and be writable.
 
 Booleans accept `1`, `true`, or `yes`, case-insensitively — anything else is false, so
 `on`, `y`, and `enabled` all read as false. A non-numeric value for a numeric setting raises
@@ -66,7 +66,10 @@ down.
 |---|---|---|
 | `TUZKAOCR_HEIGHT_SCALE` | `1.0` | Multiplies predicted line heights (valid range 0.1–10.0) |
 | `TUZKAOCR_MAX_WIDTH` | `3400` | Maximum line-crop width fed to the recognizer, in pixels |
-| `TUZKAOCR_ADAPTIVE_DOWNSAMPLE` | `true` | Re-run resolution-starved printed pages at a finer downsample (never for `handwritten`, `kurrent` or `kramarky`) |
+| `TUZKAOCR_ADAPTIVE_DOWNSAMPLE` | `true` | Size the printed layout pass to each page's text size (never for `handwritten`, `kurrent` or `kramarky`) |
+| `TUZKAOCR_LAYOUT_LINE_HEIGHT` | `12` | Target text-line height, in pixels, at the layout model input when adaptive downsampling is on (valid range 4–64); `0` falls back to the fixed downsample |
+| `TUZKAOCR_READING_ORDER` | `columns` | Order of text blocks on printed pages: `columns` (column by column, aware of printed rules) or `basic` (horizontal bands, the earlier order); see [reading order](#reading-order) |
+| `TUZKAOCR_LARGE_TEXT` | `true` | Extra layout pass for text far larger than the body text, such as newspaper mastheads; see [large text](#large-text) |
 | `TUZKAOCR_CROP_ENDPOINT_EXT` | `0.0` | Extend line crops at both ends, as a fraction of line height |
 | `TUZKAOCR_COLUMN_SPLIT` | `false` | Order lines column-by-column within a region |
 
@@ -78,21 +81,78 @@ down.
 
 ### Adaptive downsampling
 
-The layout model runs at a fixed downsample by default. On dense, multi-column pages that
-resolution is too coarse: lines get missed, geometry becomes imprecise, and recognition
-degrades. With adaptive downsampling on, each page is processed at the standard downsample
-first; if it looks resolution-starved — overlapping baselines or low confidence — it is
-reprocessed finer and the highest-confidence result wins.
+The layout model works best when text lines reach it about 12 pixels tall. A fixed
+downsample cannot guarantee that: a newspaper broadsheet with small type ends up with lines
+of 6–7 pixels, so lines get missed, geometry becomes imprecise, and recognition degrades.
 
-Pages that escalate cost roughly 2–3× the per-page time. It cannot be switched off per
-request; set `TUZKAOCR_ADAPTIVE_DOWNSAMPLE=false` server-side, or pass `--no-adaptive` on
-the CLI.
+With adaptive downsampling on (the default for the printed domain), each page is measured
+before the layout model runs: a fast image analysis (a few tens of milliseconds) estimates
+its typical text-line height. The page is then scaled so its lines land at
+`TUZKAOCR_LAYOUT_LINE_HEIGHT` pixels, and the layout model runs once at that scale. Large
+book type is scaled down further than before, small newspaper type less, so pages with
+ordinary type cost about the same as a fixed pass and broadsheets cost about 2×. The rare
+page whose text size cannot be estimated reliably gets one extra coarse layout pass to
+measure it. If the layout model then finds lines far taller than the target (more than 5/3
+of it), the estimate was misled — typically by faint typewriter whose letters break into
+dots — and the layout runs once more at the scale the model's own measurement implies.
 
-The `handwritten`, `kurrent` and `kramarky` domains never escalate, whatever this setting
-says. On handwriting the finer passes split faint pencil and grid-paper lines into
-fragments, so a single pass at the standard downsample is both more accurate and about 3×
-faster in layout. On Kramarky broadsheets a single pass is about 2× faster for a small
-accuracy cost (roughly +0.3 percentage points CER on the benchmark set).
+Double-page spreads, which are split down the gutter, always use the fixed downsample.
+
+It cannot be switched off per request; set `TUZKAOCR_ADAPTIVE_DOWNSAMPLE=false`
+server-side, or pass `--no-adaptive` on the CLI, to use the fixed downsample for every page.
+
+The `handwritten`, `kurrent` and `kramarky` domains always use the fixed downsample,
+whatever this setting says: the text-size estimate is not reliable on handwriting, and it
+has not been evaluated on Kramarky broadsheets.
+
+### Reading order
+
+The order of text blocks decides the order of the plain-text output and of the
+`TextBlock` elements in ALTO and PAGE XML.
+
+With `TUZKAOCR_READING_ORDER=columns` (the default), the page is divided recursively:
+
+- Printed horizontal rules that span most of a section split it into parts read one after
+  another. On newspapers this keeps a feuilleton "under the line" after the columns above
+  it, including when the rule is broken at every column gutter.
+- Rows of blocks that share the same columns stay together, so each column is read top to
+  bottom before the next one starts.
+- Full-width headings and banners split the page into sections.
+- On a front page, the header row ("Ročník | date | Číslo") is read first, then the
+  masthead band, then the columns.
+
+Rule detection checks the continuity, slope and thickness of the original printed ink.
+Slightly slanted or gently wavy dividers can still separate sections, and aligned fragments
+can be joined across narrow column gutters. Occasional vertical strokes crossing a divider
+do not by themselves make it too thick. This is bounded to near-horizontal rules (slope up
+to 0.04, about 2.3 degrees); very faint, heavily broken or more steeply slanted dividers may
+still be missed. The detector uses the existing layout-input image and adds no OCR pass:
+each line is recognised once. The `basic` order and non-print domains do not use this
+rule-aware ordering.
+
+Before ordering, a one- or two-line block sitting directly under a paragraph, aligned with
+it and set in the same type size, is joined to that paragraph. This is typically the last
+line of the paragraph that the layout model split off. Headings, indented first lines of the
+next paragraph, and lines below a printed rule are left as separate blocks.
+
+`TUZKAOCR_READING_ORDER=basic` restores the earlier order: blocks are grouped into
+horizontal bands and read left to right within each band, and orphan lines are not
+re-attached. A single-column page reads top to bottom either way.
+
+### Large text
+
+At the scale chosen for body text, a newspaper masthead can be ten times taller than what the
+layout model expects. The model then sees only fragments of letters, and the title comes out
+as junk or not at all. With `TUZKAOCR_LARGE_TEXT=true` (the default), a page that contains
+text at least four times the height of its body text gets one extra, coarser layout pass.
+Large lines from that pass replace the fragments under them and are recognised from a
+slightly widened crop. Pages without large text skip the extra pass. On pages that need it,
+it costs about 0.2–0.7 s.
+
+Both settings apply to the printed domain only. The `handwritten`, `kurrent` and
+`kramarky` domains always use the `basic` order without the large-text pass. Double-page
+spreads split down the gutter use the selected reading order on each half, but never the
+large-text pass.
 
 ## Line roles
 

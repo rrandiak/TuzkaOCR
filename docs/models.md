@@ -23,7 +23,10 @@ directory. TuzkaOCR finds the style file by name and refuses to start without it
 single-line page is read without page context.
 
 `handwritten` and `kurrent` also extend line crops at both ends (0.3 of line height) and
-order lines column-by-column within a region, which suits free-flowing script.
+order lines column-by-column within a region, which suits free-flowing script. The
+printed domain alone uses the column-first [reading order](configuration.md#reading-order)
+for text blocks and the [large-text](configuration.md#large-text) pass for mastheads; the
+other domains keep the basic band order without it.
 
 !!! warning "Kramarky is a narrow specialised domain"
     The kramarky pair is trained for kramarky broadsheet prints and should be selected only

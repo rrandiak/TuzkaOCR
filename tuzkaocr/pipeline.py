@@ -12,7 +12,7 @@ from . import _models
 from .config import Config
 from .images import decode_image_path, dpi_from_page_width, read_image_dpi
 from .layout.detector import LayoutDetector
-from .layout import adaptive
+from .layout.large_text import stretch_crop
 from .lang import LanguageDetector
 from .layout.role import RoleClassifier
 from .ocr.recognizer import create_recognizer
@@ -135,27 +135,6 @@ def _pitch_calibrate(lines) -> None:
             ln.heights = (asc * scale, ln.heights[1] * scale)
 
 
-def _layout_starved(lp: dict) -> bool:
-    return (lp["lineh"] < adaptive.MIN_LINE_HEIGHT_PX
-            or lp["pitch"] < adaptive.PITCH_RATIO_THRESH
-            or lp["wide"] > adaptive.WIDE_FRAC_THRESH)
-
-
-def _choose_recognized(recognized: List[dict], base_lp: dict) -> dict:
-    if len(recognized) == 1:
-        return recognized[0]
-    base = recognized[0]
-    base_starved = (base["pitch"] < adaptive.PITCH_RATIO_THRESH
-                    or base["mean_conf"] < adaptive.UNREADABLE_CONF
-                    or base["lineh"] < adaptive.MIN_LINE_HEIGHT_PX)
-    cand = max(recognized, key=lambda v: v["mean_conf"])
-    accept = (cand["ds"] != base["ds"]
-              and cand["mean_conf"] > base["mean_conf"] + adaptive.SELECT_MARGIN
-              and (base_starved
-                   or cand["n_lines"] <= adaptive.LINE_INFLATE_FACTOR * max(1, base_lp["n_lines"])))
-    return cand if accept else base
-
-
 def _blocks_to_text(blocks: List[dict]) -> str:
     parts = []
     for block in blocks:
@@ -181,6 +160,8 @@ class PageProcessor:
             threads=config.ocr_threads,
             cpu_mem_arena=config.cpu_mem_arena,
             column_split=getattr(config, "column_split", False),
+            reading_order=getattr(config, "reading_order", "basic"),
+            large_text=getattr(config, "large_text", False),
         )
         self.recognizer = create_recognizer(
             str(ocr_path),
@@ -195,13 +176,13 @@ class PageProcessor:
         self._role: Optional[RoleClassifier] = None
         self._lang: Optional[LanguageDetector] = None
 
-    def _layout_pass(self, img_bgr: np.ndarray, downsample: Optional[int]) -> dict:
-        regions, img_scale = self.detector.detect(img_bgr, downsample)
-        return {"regions": regions, "img_scale": img_scale,
-                "n_lines": sum(len(r.lines) for r in regions),
-                "pitch": adaptive.min_pitch_ratio(regions, img_scale),
-                "wide": adaptive.wide_line_frac(regions, img_scale, img_bgr.shape[1]),
-                "lineh": adaptive.median_line_height(regions)}
+    def _layout_pass(self, img_bgr: np.ndarray) -> dict:
+        if self.config.adaptive_downsample and self.config.layout_line_height > 0:
+            regions, img_scale = self.detector.detect(
+                img_bgr, None, line_height=self.config.layout_line_height)
+        else:
+            regions, img_scale = self.detector.detect(img_bgr, None)
+        return {"regions": regions, "img_scale": img_scale}
 
     def _recognize_pass(self, img_bgr: np.ndarray, hs: float, lp: dict) -> dict:
         img_scale = lp["img_scale"]
@@ -214,6 +195,8 @@ class PageProcessor:
                                         endpoint_ext=self.config.crop_endpoint_ext)
                 if gray is None:
                     continue
+                if line.large:
+                    gray, M = stretch_crop(gray, M)
                 line_data.append(_LineInput(
                     gray=gray, M=M, region_idx=ri,
                     baseline=[(x * img_scale, y * img_scale) for x, y in line.baseline]))
@@ -223,9 +206,7 @@ class PageProcessor:
         confs = [c for (t, _, c) in results if t.strip()]
         mean_conf = float(np.mean(confs)) if confs else 0.0
         return {"line_data": line_data, "results": results, "mean_conf": mean_conf,
-                "regions": lp["regions"], "img_scale": img_scale,
-                "pitch": lp["pitch"], "n_lines": lp["n_lines"],
-                "wide": lp["wide"], "lineh": lp["lineh"]}
+                "regions": lp["regions"], "img_scale": img_scale}
 
     @staticmethod
     def _assemble_blocks(line_data: List[_LineInput], results: list,
@@ -282,26 +263,8 @@ class PageProcessor:
         cfg = self.config
         hs = cfg.height_scale if height_scale is None else height_scale
 
-        if not cfg.adaptive_downsample:
-            lp = self._layout_pass(img_bgr, None)
-            chosen = self._recognize_pass(img_bgr, hs, lp)
-        else:
-            levels = adaptive.DS_LEVELS
-            base_lp = None
-            recognized = []
-            for k, ds in enumerate(levels):
-                lp = self._layout_pass(img_bgr, ds)
-                if base_lp is None:
-                    base_lp = lp
-                is_last = k == len(levels) - 1
-                if _layout_starved(lp) and not is_last:
-                    continue
-                r = self._recognize_pass(img_bgr, hs, lp)
-                r["ds"] = ds
-                recognized.append(r)
-                if is_last or r["mean_conf"] >= adaptive.OCR_CONF_THRESH:
-                    break
-            chosen = _choose_recognized(recognized, base_lp)
+        lp = self._layout_pass(img_bgr)
+        chosen = self._recognize_pass(img_bgr, hs, lp)
 
         blocks = self._assemble_blocks(chosen["line_data"], chosen["results"],
                                        chosen.get("regions"), chosen.get("img_scale") or 1.0)

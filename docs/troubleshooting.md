@@ -34,14 +34,29 @@
 
     1. **Check the domain.** The wrong model pair costs more accuracy than every other
        setting combined. See [Models and domains](models.md).
-    2. **Leave adaptive downsampling on** for dense multi-column printed pages — do not
-       pass `--no-adaptive`. It applies to the printed domain only; `handwritten`,
+    2. **Leave adaptive downsampling on** for small-type and multi-column printed pages —
+       do not pass `--no-adaptive`. It applies to the printed domain only; `handwritten`,
        `kurrent` and `kramarky` always use a single pass.
     3. **Try `--height-scale 1.5`** if crops appear to clip ascenders or descenders.
     4. **Check the scan.** Below roughly 200 dpi, no setting recovers the page.
 
     For API jobs, `mean_conf` from the status endpoint is a good triage signal — low values
     flag pages worth re-scanning rather than re-running.
+
+??? failure "Columns or articles are read in the wrong order"
+    Printed pages use the column-first reading order by default. If it reads a page in a
+    worse order than before, set `TUZKAOCR_READING_ORDER=basic` (or pass
+    `--reading-order basic` on the CLI) to restore the earlier band order: blocks grouped
+    into horizontal bands and read left to right. The order inside each block is not
+    affected by this setting. See [reading order](configuration.md#reading-order).
+
+??? failure "A newspaper title is garbled or missing"
+    Mastheads are read by an extra large-text layout pass, which is on by default for the
+    printed domain. Check that `TUZKAOCR_LARGE_TEXT` is not set to false and that
+    `--no-large-text` is not passed. Some display faces, such as swash capitals or
+    accented display letters, are still misread by the recognizer. If the pass hurts a
+    collection, for example by replacing ordinary headings, set `TUZKAOCR_LARGE_TEXT=false`.
+    See [large text](configuration.md#large-text).
 
 ??? failure "Kramarky output is poor on a newspaper"
     The kramarky pair is for kramarky broadsheet prints specifically, not periodicals in
@@ -89,6 +104,10 @@
     The image could not be decoded, or it exceeds `TUZKAOCR_MAX_IMAGE_PIXELS` (default 300
     megapixels). Uploads are accepted before decoding, so this arrives as a **failed job**
     rather than a rejected request; the message is in the status response's `error` field.
+
+    Very small or narrow decoded images are accepted. When the text-size estimator cannot
+    measure their text, layout uses the fixed-downsample fallback. Such images may contain
+    no recognizable text.
 
 ??? failure "404 from `status` for a job that definitely existed"
     Either the job aged out past `TUZKAOCR_MAX_JOB_AGE_HOURS` (default 24), or the server

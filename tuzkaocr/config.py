@@ -55,6 +55,9 @@ class Config:
     column_split:      bool  = field(default_factory=lambda: _env("COLUMN_SPLIT", False))
 
     adaptive_downsample: bool = field(default_factory=lambda: _env("ADAPTIVE_DOWNSAMPLE", True))
+    layout_line_height:  float = field(default_factory=lambda: _env("LAYOUT_LINE_HEIGHT", 12.0))
+    reading_order:       str   = field(default_factory=lambda: _env("READING_ORDER", "columns"))
+    large_text:          bool  = field(default_factory=lambda: _env("LARGE_TEXT", True))
     
     cpu_mem_arena: bool = field(default_factory=lambda: _env("CPU_MEM_ARENA", True))
 
@@ -84,6 +87,7 @@ class Config:
 
     _ALLOWED_DEVICES = ("cpu", "cuda", "auto")
     _ALLOWED_ALTO_PROFILES = ("basic", "ndk")
+    _ALLOWED_READING_ORDERS = ("columns", "basic")
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -118,9 +122,20 @@ class Config:
                 f"got {self.alto_profile!r}"
             )
 
+        if self.reading_order not in self._ALLOWED_READING_ORDERS:
+            errors.append(
+                f"TUZKAOCR_READING_ORDER must be one of {self._ALLOWED_READING_ORDERS}, "
+                f"got {self.reading_order!r}"
+            )
+
         if not (0.1 <= self.height_scale <= 10.0):
             errors.append(
                 f"TUZKAOCR_HEIGHT_SCALE must be in [0.1, 10.0], got {self.height_scale}"
+            )
+
+        if self.layout_line_height != 0 and not (4.0 <= self.layout_line_height <= 64.0):
+            errors.append(
+                f"TUZKAOCR_LAYOUT_LINE_HEIGHT must be 0 or in [4, 64], got {self.layout_line_height}"
             )
 
         if self.spool_dir:

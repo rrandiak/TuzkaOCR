@@ -6,13 +6,22 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from .large_text import apply_large_text
 from .postprocess import maps_to_regions, Region
+from .textsize import estimate_line_height
 
 DOWNSAMPLE         = 3
 MAX_ORIGINAL_WIDTH = 1500
 MAX_SIDE           = 1536
 WIDE_ASPECT        = 1.2     
 GUTTER_RATIO       = 0.25    
+MIN_SCALED_WIDTH   = 300
+MAX_SCALED_PIXELS  = 6.0e6
+MIN_BASELINE_PIXELS = 50
+TEXT_HEIGHT_GAIN   = 1.07
+TEXT_HEIGHT_MIN_CONF = 0.3
+TEXT_HEIGHT_MIN_WIDTH_FRAC = 0.006
+TEXT_HEIGHT_RECHECK = 5.0 / 3.0
                             
 
 def _has_central_gutter(img_bgr: np.ndarray) -> bool:
@@ -28,6 +37,20 @@ def _has_central_gutter(img_bgr: np.ndarray) -> bool:
     return float(ink[c0:c1].min()) < GUTTER_RATIO * med
 
 
+def _median_line_height(maps: np.ndarray) -> float | None:
+    base = maps[..., 2] > 0.5
+    if int(base.sum()) <= MIN_BASELINE_PIXELS:
+        return None
+    return float(np.median((maps[..., 0] + maps[..., 1])[base]))
+
+
+def _scaled_width(w: int, h: int, line_height: float, target: float) -> int:
+    width = w * target / line_height
+    width = min(width, (MAX_SCALED_PIXELS * w / h) ** 0.5)
+    width = max(min(width, w), min(MIN_SCALED_WIDTH, w))
+    return max(1, int(round(width)))
+
+
 def _sigmoid_inplace(x: np.ndarray) -> None:
     np.negative(x, out=x)
     np.exp(x, out=x)
@@ -37,8 +60,11 @@ def _sigmoid_inplace(x: np.ndarray) -> None:
 
 class LayoutDetector:
     def __init__(self, model_path: str | Path, device: str = "cpu", threads: int = 4,
-                 cpu_mem_arena: bool = True, column_split: bool = False):
+                 cpu_mem_arena: bool = True, column_split: bool = False,
+                 reading_order: str = "basic", large_text: bool = False):
         self.column_split = column_split
+        self.reading_order = reading_order
+        self.large_text = large_text
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = threads
         opts.inter_op_num_threads = max(1, threads // 2)
@@ -101,13 +127,57 @@ class LayoutDetector:
         gray = cv2.cvtColor(img_ds, cv2.COLOR_BGR2GRAY)
         return np.ascontiguousarray(maps, dtype=np.float32), img_scale, gray
 
-    def detect(self, img_bgr: np.ndarray, downsample: int | None = None) -> tuple[list[Region], float]:
+    def get_maps_at_width(self, img_bgr: np.ndarray, width: int) -> tuple[np.ndarray, float, np.ndarray]:
+        orig_h, orig_w = img_bgr.shape[:2]
+        height = max(1, int(round(orig_h * width / orig_w)))
+        img = (img_bgr if (width, height) == (orig_w, orig_h)
+               else cv2.resize(img_bgr, (width, height), interpolation=cv2.INTER_AREA))
+        ph = (32 - height % 32) % 32
+        pw = (32 - width % 32) % 32
+        img_pad = np.pad(img, ((0, ph), (0, pw), (0, 0)), mode="edge") if ph or pw else img
+        tensor = img_pad.astype(np.float32).transpose(2, 0, 1)[None] / 255.0
+        out = self.session.run(None, {self._input_name: tensor})[0]
+        if self._needs_sigmoid:
+            _sigmoid_inplace(out[:, 2:5])
+        maps = np.ascontiguousarray(out[0, :, :height, :width].transpose(1, 2, 0), dtype=np.float32)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return maps, orig_h / height, gray
+
+    def text_line_height(self, img_bgr: np.ndarray) -> float | None:
+        est, conf = estimate_line_height(img_bgr)
+        min_height = TEXT_HEIGHT_MIN_WIDTH_FRAC * img_bgr.shape[1]
+        if np.isfinite(est) and est >= min_height and conf >= TEXT_HEIGHT_MIN_CONF:
+            return est * TEXT_HEIGHT_GAIN
+        maps, img_scale, _ = self.get_maps(img_bgr, 1)
+        line_height = _median_line_height(maps)
+        return None if line_height is None else line_height * img_scale
+
+    def detect(self, img_bgr: np.ndarray, downsample: int | None = None,
+               line_height: float | None = None) -> tuple[list[Region], float]:
         orig_h, orig_w = img_bgr.shape[:2]
         if orig_w > orig_h * WIDE_ASPECT and _has_central_gutter(img_bgr):
             return self._detect_split(img_bgr, downsample)
 
-        maps, img_scale, gray = self.get_maps(img_bgr, downsample)
-        return maps_to_regions(maps, gray, column_split=self.column_split), img_scale
+        maps = None
+        if line_height and downsample is None:
+            page_line_height = self.text_line_height(img_bgr)
+            if page_line_height:
+                width = _scaled_width(orig_w, orig_h, page_line_height, line_height)
+                maps, img_scale, gray = self.get_maps_at_width(img_bgr, width)
+                seen = _median_line_height(maps)
+                if seen is not None and seen > TEXT_HEIGHT_RECHECK * line_height:
+                    width = _scaled_width(orig_w, orig_h, seen * img_scale, line_height)
+                    maps, img_scale, gray = self.get_maps_at_width(img_bgr, width)
+        if maps is None:
+            maps, img_scale, gray = self.get_maps(img_bgr, downsample)
+        regions = self._regions(maps, gray)
+        if self.large_text and downsample is None:
+            regions = apply_large_text(self, img_bgr, regions, maps, gray, img_scale, self.reading_order)
+        return regions, img_scale
+
+    def _regions(self, maps: np.ndarray, gray: np.ndarray) -> list[Region]:
+        return maps_to_regions(maps, gray, column_split=self.column_split,
+                               reading_order=self.reading_order)
 
     def _detect_split(self, img_bgr: np.ndarray, downsample: int | None = None) -> tuple[list[Region], float]:
         h, w = img_bgr.shape[:2]
@@ -116,11 +186,11 @@ class LayoutDetector:
 
         left_maps, _, left_gray  = self.get_maps(img_bgr[:, :mid], downsample)
         L_wd = left_maps.shape[1]
-        left_regions = maps_to_regions(left_maps, left_gray, column_split=self.column_split)
+        left_regions = self._regions(left_maps, left_gray)
 
         right_maps, _, right_gray = self.get_maps(img_bgr[:, mid:], downsample)
         R_wd = right_maps.shape[1]
-        right_regions = maps_to_regions(right_maps, right_gray, column_split=self.column_split)
+        right_regions = self._regions(right_maps, right_gray)
 
         pre_scale = MAX_ORIGINAL_WIDTH / w if w > MAX_ORIGINAL_WIDTH else 1.0
         F_w = int(w * pre_scale) if w > MAX_ORIGINAL_WIDTH else w

@@ -297,7 +297,8 @@ PcGts
         └── TextEquiv → Unicode            the region's lines joined by newlines
 ```
 
-Regions appear in reading order, which `ReadingOrder` also states explicitly. Lines with no
+Regions appear in reading order, which `ReadingOrder` also states explicitly (see
+[reading order](configuration.md#reading-order) for how it is determined). Lines with no
 recognized text are dropped, and a region left with no lines is omitted.
 
 `conf` is the recognizer's confidence, 0 = uncertain … 1 = certain — the same values as ALTO

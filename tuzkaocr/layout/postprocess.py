@@ -6,12 +6,15 @@ import cv2
 import numpy as np
 from scipy import ndimage as ndi
 
+from .reading_order import order_page
+
 
 @dataclass
 class TextLine:
     baseline: List[Tuple[int, int]]
     polygon: List[Tuple[int, int]]
     heights: Tuple[float, float]
+    large: bool = False
 
 
 @dataclass
@@ -461,8 +464,15 @@ def _order_regions(regions: List[Region]) -> List[Region]:
     return out
 
 
+def order_page_regions(regions: List[Region], sep_map: np.ndarray, page_gray: np.ndarray = None,
+                       reading_order: str = "basic") -> List[Region]:
+    if reading_order == "columns":
+        return order_page(regions, sep_map, page_gray)
+    return _order_regions(regions)
+
+
 def maps_to_regions(maps: np.ndarray, page_gray: np.ndarray = None,
-                    column_split: bool = False) -> List[Region]:
+                    column_split: bool = False, reading_order: str = "basic") -> List[Region]:
     lines = _extract_lines(maps)
     if not lines:
         return []
@@ -471,4 +481,4 @@ def maps_to_regions(maps: np.ndarray, page_gray: np.ndarray = None,
     groups = _cluster_regions(lines, sep_map)
     regions = _assemble_regions(groups, column_split=column_split)
     regions = [r2 for r in regions for r2 in _split_bridged_columns(r, sep_map)]
-    return _order_regions(regions)
+    return order_page_regions(regions, sep_map, page_gray, reading_order)

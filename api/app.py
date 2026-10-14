@@ -113,6 +113,8 @@ class ProcessorCache:
                     crop_endpoint_ext=ext,
                     column_split=colsplit,
                     adaptive_downsample=False,
+                    reading_order="basic",
+                    large_text=False,
                 )
                 self._by_domain[domain] = PageProcessor(cfg)
             return self._by_domain[domain]

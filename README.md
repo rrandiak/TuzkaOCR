@@ -268,7 +268,10 @@ TUZKAOCR_HEIGHT_SCALE=1.0           # line-height multiplier
 TUZKAOCR_MAX_WIDTH=3400             # max line-crop width fed to the recognizer, in px
 TUZKAOCR_CROP_ENDPOINT_EXT=0.0      # extend line crops at both ends, as a fraction of line height
 TUZKAOCR_COLUMN_SPLIT=false         # true = order lines column-by-column within a region
-TUZKAOCR_ADAPTIVE_DOWNSAMPLE=true   # true = recover dense pages via adaptive downsampling
+TUZKAOCR_ADAPTIVE_DOWNSAMPLE=true   # true = size the printed layout pass to each page's text size
+TUZKAOCR_LAYOUT_LINE_HEIGHT=12      # target text-line height (px) at the layout model input
+TUZKAOCR_READING_ORDER=columns      # columns = column-first block order; basic = earlier band order
+TUZKAOCR_LARGE_TEXT=true            # true = extra layout pass for mastheads and other very large text
 TUZKAOCR_CPU_MEM_ARENA=true         # false = release RAM to OS between pages (see Memory below)
 TUZKAOCR_ROLE_CLASSIFIER=false      # true = tag each ALTO TextLine with role (body/heading/...)
 TUZKAOCR_ALTO_PROFILE=ndk           # ndk = Czech NDK ingest profile; basic = pre-1.7.2 shape
@@ -317,17 +320,34 @@ custom recognizer.
 
 ## Adaptive downsampling
 
-The layout model runs at a fixed downsample by default. On dense, multi-column pages (periodicals, classifieds) that resolution is too coarse: lines are missed or their geometry is imprecise and the recognized text degrades. With adaptive downsampling enabled (the default), each page is first processed at the standard downsample; if it looks resolution-starved (overlapping baselines or low recognition confidence) the page is re-processed at a finer downsample, and the result with the highest recognition confidence is kept.
+The layout model works best when text lines reach it about 12 pixels tall, but a fixed downsample shrinks every page to the same width regardless of its type size: on newspaper broadsheets lines end up 6–7 pixels tall, so lines are missed and their geometry is imprecise. With adaptive downsampling enabled (the default), a fast image analysis first estimates the page's typical text-line height, the page is scaled so its lines land at `TUZKAOCR_LAYOUT_LINE_HEIGHT` pixels, and the layout model runs once at that scale.
 
-Dense pages that escalate cost roughly 2–3x the per-page time for a large quality gain. Disable per request is not supported; control it server-side:
+Pages with ordinary type cost about the same as a fixed pass; broadsheets cost about 2× in layout. Disable per request is not supported; control it server-side:
 
 ```text
-TUZKAOCR_ADAPTIVE_DOWNSAMPLE=true   # default; set false for fixed single-pass layout
+TUZKAOCR_ADAPTIVE_DOWNSAMPLE=true   # default; set false for the fixed downsample
+TUZKAOCR_LAYOUT_LINE_HEIGHT=12      # default target line height in pixels
 ```
 
-The CLI exposes `--no-adaptive` to force the fixed single-pass path.
+The CLI exposes `--no-adaptive` to force the fixed downsample.
 
-The `handwritten`, `kurrent` and `kramarky` domains never escalate and always use a single pass at the standard downsample: on handwriting the finer passes split faint and grid-paper lines into fragments, and on Kramarky broadsheets escalation costs about 2× the time for a small gain.
+The `handwritten`, `kurrent` and `kramarky` domains always use the fixed downsample: the text-size estimate is not reliable on handwriting, and it has not been evaluated on Kramarky broadsheets.
+
+## Reading order and large text
+
+Printed pages are read column by column (`TUZKAOCR_READING_ORDER=columns`, the default):
+printed horizontal rules, column gutters and full-width headings divide the page, so each
+column is read top to bottom.
+A paragraph's last line that the layout model split off is joined back to its paragraph.
+`TUZKAOCR_READING_ORDER=basic` (CLI `--reading-order basic`) restores the earlier band order.
+
+With `TUZKAOCR_LARGE_TEXT=true` (the default), pages with text at least four times taller
+than the body text, such as newspaper mastheads, get one extra coarse layout pass, so the
+title is recognised as one line instead of letter fragments. It costs about 0.2–0.7 s on
+pages that need it and nothing on the rest. The CLI flag `--no-large-text` skips it.
+
+Both apply to the printed domain only; `handwritten`, `kurrent` and `kramarky` always use the
+`basic` order without the large-text pass.
 
 ## Line role classification (experimental)
 

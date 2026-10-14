@@ -60,8 +60,16 @@ def main() -> None:
     p.add_argument("--height-scale", type=float, default=1.0,
                    help="Multiply predicted line heights (use 1.5 if layout model underestimates)")
     p.add_argument("--no-adaptive", dest="adaptive", action="store_false",
-                   help="Disable adaptive downsampling (use fixed DS3 layout)")
+                   help="Disable adaptive downsampling (fixed-downsample layout instead of sizing it to the text)")
     p.set_defaults(adaptive=True)
+    p.add_argument("--reading-order", choices=["columns", "basic"], default=None,
+                   help="Block reading order for printed pages: columns (column by column, "
+                        "aware of printed rules) or basic (horizontal bands); default "
+                        "TUZKAOCR_READING_ORDER or columns")
+    p.add_argument("--no-large-text", dest="large_text", action="store_false",
+                   help="Disable the extra layout pass for text far larger than the body "
+                        "text (newspaper mastheads)")
+    p.set_defaults(large_text=True)
     p.add_argument("--role-classifier", dest="role_classifier", action="store_true",
                    help="Tag each line with role (body/heading/header/footer/page_number) in ALTO TYPE attr")
     p.set_defaults(role_classifier=False)
@@ -112,6 +120,7 @@ def main() -> None:
         domain_layout = _base.layout_model
         domain_ocr    = _base.ocr_model
 
+    is_print = args.domain in ("default", "print")
     cfg_kwargs = dict(
         layout_model  = args.layout_model or domain_layout,
         ocr_model     = args.ocr_model    or domain_ocr,
@@ -121,7 +130,9 @@ def main() -> None:
         line_workers  = args.line_workers,
         page_workers  = args.workers,
         height_scale  = args.height_scale,
-        adaptive_downsample = args.adaptive and args.domain in ("default", "print"),
+        adaptive_downsample = args.adaptive and is_print,
+        reading_order = (args.reading_order or _base.reading_order) if is_print else "basic",
+        large_text = args.large_text and _base.large_text and is_print,
         role_classifier = args.role_classifier,
         crop_endpoint_ext = (0.3 if args.domain in ("handwritten", "kurrent") else 0.0),
         column_split = args.domain in ("handwritten", "kurrent"),

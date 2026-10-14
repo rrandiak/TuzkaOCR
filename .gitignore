@@ -13,6 +13,7 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+/tests/
 
 # Local environments and secrets
 .env

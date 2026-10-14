@@ -174,16 +174,27 @@ back to CPU otherwise. The plain `onnxruntime` wheel is CPU-only, so `auto` reso
 | Option | Default | Effect |
 |---|---|---|
 | `--height-scale` | `1.0` | Multiply predicted line heights; try `1.5` if crops clip ascenders |
-| `--no-adaptive` | *adaptive on* | Force a single fixed-resolution layout pass (always the case for `handwritten`, `kurrent` and `kramarky`) |
+| `--no-adaptive` | *adaptive on* | Run layout at the fixed downsample instead of sizing it to the page's text (always the case for `handwritten`, `kurrent` and `kramarky`) |
+| `--reading-order` | `columns` | Block order on printed pages: `columns` or `basic`; overrides `TUZKAOCR_READING_ORDER` |
+| `--no-large-text` | *large text on* | Skip the extra layout pass for mastheads and other very large text |
 | `--role-classifier` | off | Tag each line with a structural role in the ALTO output |
 
-**Adaptive downsampling** is on by default. Each page is first processed at the standard
-downsample; if it looks resolution-starved — overlapping baselines, or low recognition
-confidence — it is reprocessed at a finer downsample and the result with the highest
-confidence wins. Dense multi-column pages that escalate cost roughly 2–3× the per-page
-time. `--no-adaptive` disables the second pass. The `handwritten`, `kurrent` and `kramarky`
-domains always use a single pass: escalation fragments handwritten lines, and on Kramarky it
-costs about 2× the time for little gain.
+**Adaptive downsampling** is on by default for the printed domain. Before layout, each page's
+typical text-line height is estimated and the page is scaled so its lines reach the layout
+model about 12 pixels tall, in a single layout pass. Newspapers and other small-type pages
+get a finer layout than a fixed downsample would give; large book type gets a coarser one.
+`--no-adaptive` uses the fixed downsample for every page. The `handwritten`, `kurrent` and
+`kramarky` domains always use the fixed downsample. See
+[Configuration](configuration.md#adaptive-downsampling) for details.
+
+**Reading order** is column by column by default (`--reading-order columns`): printed rules,
+column gutters and the masthead header row decide the order of text blocks.
+`--reading-order basic` restores the earlier order, horizontal bands read left to right.
+**Large text** (on by default) adds a coarse layout pass on pages with a masthead or other
+text far larger than the body text, so the title is read as one line instead of letter
+fragments; `--no-large-text` skips it. Both apply to the printed domain only. The
+`handwritten`, `kurrent` and `kramarky` domains always use the `basic` order without the
+large-text pass. See [Configuration](configuration.md#reading-order).
 
 **Role classification** tags every line as `body`, `heading`, `header`, `footer`, or
 `page_number`, surfaced in ALTO as a `StructureTag`. It costs a few milliseconds per page
