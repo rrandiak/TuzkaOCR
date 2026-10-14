@@ -34,7 +34,7 @@ New to the command line? Follow the [step-by-step guide](docs/beginners.md).
 ## HTTP service
 
 ```bash
-docker compose up --build -d cpu
+docker run -d -p 8000:8000 ghcr.io/moravianlibrary/tuzkaocr:latest
 JOB=$(curl -s -F "image=@page.jpg" -F "fmt=alto" http://localhost:8000/api/v1/process | jq -r .job_id)
 curl "http://localhost:8000/api/v1/status/$JOB"
 curl -o page.alto.xml "http://localhost:8000/api/v1/result/$JOB"

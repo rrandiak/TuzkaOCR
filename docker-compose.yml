@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: tuzkaocr:cpu
+    image: ghcr.io/moravianlibrary/tuzkaocr:${TUZKAOCR_VERSION:-latest}
     env_file:
       - ./tuzkaocr.env
     environment:

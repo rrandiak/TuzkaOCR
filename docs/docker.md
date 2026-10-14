@@ -1,14 +1,13 @@
 # Docker
 
-Two images are provided: a CPU image (`Dockerfile`) and a GPU image (`Dockerfile.gpu`).
-Both carry the same code, so either can serve the HTTP API or run the CLI.
+The CPU image is published for every release as `ghcr.io/moravianlibrary/tuzkaocr`, for
+amd64 and arm64. A GPU image (`Dockerfile.gpu`) can be built locally. CPU is the supported
+deployment.
 
-CPU is the supported deployment.
-
-## CPU service
+## Published image
 
 ```bash
-docker compose up --build -d cpu
+docker run -d -p 8000:8000 ghcr.io/moravianlibrary/tuzkaocr:1.9.0
 curl http://localhost:8000/healthz
 ```
 
@@ -16,11 +15,22 @@ curl http://localhost:8000/healthz
 {"status": "ok"}
 ```
 
-The container listens on 8000. To publish a different host port:
+Tags: an exact version (`1.9.0`), the latest patch of a minor version (`1.9`), and
+`latest`. Pin an exact version in production.
+
+## CPU service with Compose
+
+From a clone of the repository, Compose adds the results directory, the spool volume,
+`tuzkaocr.env` and the health check:
 
 ```bash
-TUZKAOCR_CPU_PORT=18080 docker compose up --build -d cpu
+docker compose pull cpu
+docker compose up -d cpu
 ```
+
+`TUZKAOCR_VERSION=1.9.0` selects the image version (default `latest`), and
+`TUZKAOCR_CPU_PORT` the host port (default 8000). To build the image from your checkout
+instead, use `docker compose up --build -d cpu`.
 
 
 ## GPU service

@@ -17,6 +17,7 @@ COPY tuzkaocr/ tuzkaocr/
 COPY api/      api/
 COPY cli.py    cli.py
 COPY tuzkaocr.env tuzkaocr.env
+COPY LICENSE NOTICE ./
 
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app \
