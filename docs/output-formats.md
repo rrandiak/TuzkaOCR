@@ -8,17 +8,7 @@ Four formats, chosen with `--format` on the CLI or the `fmt` field on the API: `
 One line of recognized text per detected line, in reading order, UTF-8 encoded. No
 coordinates, no confidence, no structure. Blocks are separated by a blank line.
 
-```
-KRAMARSKA PISEN
-o velike vode v Brne
-leta Pane 1893
-```
-
-Best for full-text indexing and search. Use ALTO or PAGE if you need to link text back to the
-image.
-
-A word broken across a line end keeps its hyphen and line break here; ALTO also records the
-rejoined word — see [Hyphenation](#hyphenation).
+Hyphenated words keep their hyphen and line break.
 
 ## ALTO XML
 
@@ -33,7 +23,7 @@ Selected with `--alto-profile` (CLI), the `alto_profile` form field (API), or
 | Profile | What it is |
 |---|---|
 | `ndk` **(default)** | Output aimed at the Czech NDK ingest profile: `Processing` provenance, source image information, `Styles`, the four page margins, `LANG`, word and character confidence, hyphenation, `SP` with coordinates. Choosing it does not by itself make a file NDK-compliant — see [Configuration](configuration.md#alto-output) and the [remaining limitations](#ndk-profile-remaining-limitations). |
-| `basic` | The pre-1.7.2 shape, for consumers written against it: `OCRProcessing` provenance, `PrintSpace` covering the whole page, bare `<SP/>`, positional identifiers, `PHYSICAL_IMG_NR="1"` unless given explicitly. |
+| `basic` | A simpler layout for existing consumers: `OCRProcessing` provenance, `PrintSpace` covering the whole page, bare `<SP/>`, positional identifiers, `PHYSICAL_IMG_NR="1"` unless given explicitly. |
 
 ### Structure
 
@@ -87,12 +77,8 @@ alto SCHEMAVERSION="4.4"
                     └── SP
 ```
 
-In `ndk` all identifiers are page-sequential (`P1_TB0001`, `P1_TL0001`, `P1_ST0001`,
-`P1_SP0001`); in `basic` they are positional (`block_<b>`, `line_<b>_<l>`, `word_<b>_<l>_<w>`).
-If your code matches the `basic` identifiers, pin `--alto-profile basic`.
-
-A `TextBlock`'s rectangle is the bounding box of its lines. Lines with no recognized text are
-dropped.
+If your code matches the `basic` identifiers, pin `--alto-profile basic`. Lines with no
+recognized text are dropped.
 
 ### Page number
 
@@ -104,8 +90,7 @@ it. In the `ndk` profile it comes from, in order:
    `123456_006.tif` → 6. Names like `IMG_20240115.jpg` or `0007_recto.jp2` are not used.
 3. `1`.
 
-If you prepare material for ingest and your filenames carry no page number, pass it
-explicitly; `--ndk-warn` reports pages that fell back to `1`.
+`--ndk-warn` reports pages that fell back to `1`.
 
 ### Print space and margins
 
@@ -137,15 +122,8 @@ name:
 </Processing>
 ```
 
-Use `processingStepDescription` to tell the stages apart. The model pair identifies the domain:
-`dec-B-v2` + `rec-E-v5` is printed, `dec-B-v1k` + `rec-E-v4k7` is kramarky,
-`dec-B-v2h` + `rec-I-v2` is handwritten or Kurrent.
-
-`processingAgency` is written only when `TUZKAOCR_ALTO_AGENCY` (or `--alto-agency`) is set.
-NDK ingest requires it.
-
-The `basic` profile writes two `OCRProcessing` elements instead, with the model file stem as
-`softwareName`.
+`processingAgency` is written only when `TUZKAOCR_ALTO_AGENCY` is set. The `basic` profile
+writes two `OCRProcessing` elements instead.
 
 ### Confidence
 
@@ -156,8 +134,7 @@ The `basic` profile writes two `OCRProcessing` elements instead, with the model 
 | `ACCURACY` | `Page` | 0–100 |
 | `PC` | `Page` | 0–1 |
 
-All four come from the recognizer's per-character probabilities. The page value is the mean
-line confidence. It is a model confidence, **not** a measured accuracy.
+These are model confidences, **not** measured accuracy.
 
 ### Hyphenation
 
@@ -172,31 +149,18 @@ whole word:
   <String CONTENT="hodnutí" … SUBS_TYPE="HypPart2" SUBS_CONTENT="rozhodnutí"/>
 ```
 
-The recognized break characters are `-`, `‐`, `‑`, soft hyphen, `¬`, `=` and `⸗`. The hyphen
-is kept in `SUBS_CONTENT` when the next fragment starts with a capital or either side is a
-digit (`1848-` + `1849` → `1848-1849`), and dropped otherwise. A lowercase compound broken at
-its own hyphen (`česko-` + `slovenský`) is therefore joined without it.
-
-A hyphen with no continuation — the last line of a block, or a word split over three or more
-lines — stays inside `CONTENT` with no substitution. Plain text output always keeps the
-original line breaks and hyphens.
+A hyphen with no continuation (for example on the last line of a block) stays inside
+`CONTENT`.
 
 ### Styles
 
 `ParagraphStyle/@ALIGN` (`Left`, `Right`, `Center`, `Block`) is measured from each block's
 line edges.
 
-`FONTSIZE` is estimated from line geometry and the scan resolution:
-
-```
-FONTSIZE = min(line_height_px, line_pitch_px) × 72 / dpi
-```
-
-One `TextStyle` is emitted per rounded point size, largest first, so `TS1` is the largest
-type. The resolution is taken from, in order: `TUZKAOCR_ALTO_DPI`, the image file itself (JPEG,
-PNG or TIFF metadata), and `TUZKAOCR_ALTO_PAGE_WIDTH_MM`. Declared resolutions below 100 dpi —
-typically the 72 or 96 dpi default written by image software — are ignored. With no
-resolution, no `TextStyle` is written and `STYLEREFS` points at the paragraph style only.
+`FONTSIZE` is estimated from line height and the scan resolution, one `TextStyle` per point
+size. The resolution comes from `TUZKAOCR_ALTO_DPI`, then the image metadata (values below
+100 dpi are ignored), then `TUZKAOCR_ALTO_PAGE_WIDTH_MM`. With no resolution, no `TextStyle`
+is written.
 
 `FONTFAMILY` is written only when `TUZKAOCR_ALTO_FONTFAMILY` is set.
 
@@ -210,8 +174,6 @@ Slovak, Polish or Latin, as ISO 639-1 codes. One language is chosen per page and
 `LANG` is omitted when the page is in another language or has too little text (fewer than 25
 words, or fewer than 8 distinct ones). Set `TUZKAOCR_ALTO_LANG` (or `--alto-lang`) to force a
 value instead.
-
-On 254 historical printed pages the detector labelled 95.7% and was right on 95.1% of those.
 
 ### Line roles
 
@@ -231,20 +193,12 @@ referenced from each `TextLine` by `TAGREFS`:
 </TextLine>
 ```
 
-Two things to expect when parsing:
+An untagged line means `body`. When the classifier is not confident, the line stays
+`body`, so mistakes show up as missing roles rather than wrong ones. In the `ndk` profile roles
+also drive [margin placement](#print-space-and-margins).
 
-- **`body` is never tagged.** Only non-body roles get a `StructureTag`, and `<Tags>` is
-  omitted entirely when a page has none. An untagged line means `body`.
-- **A missing tag is not an error.** The classifier prefers silence to wrong markup: when it
-  is not confident, the line stays `body`. Mistakes appear as absent roles, never incorrect
-  ones.
-
-In the `ndk` profile roles additionally drive [margin placement](#print-space-and-margins).
-
-Enable it per request with `--role-classifier` (CLI) or `role_classifier=true` (API), or
-server-wide with `TUZKAOCR_ROLE_CLASSIFIER=true`. Roles affect only `alto`, `page` and
-`multi` output — plain text has nowhere to put them. For PAGE see
-[Roles and region types](#roles-and-region-types).
+Enable with `--role-classifier` (CLI), `role_classifier=true` (API), or
+`TUZKAOCR_ROLE_CLASSIFIER=true`. For PAGE see [Roles and region types](#roles-and-region-types).
 
 ### NDK profile: remaining limitations
 
@@ -297,18 +251,9 @@ PcGts
         └── TextEquiv → Unicode            the region's lines joined by newlines
 ```
 
-Regions appear in reading order, which `ReadingOrder` also states explicitly (see
-[reading order](configuration.md#reading-order) for how it is determined). Lines with no
-recognized text are dropped, and a region left with no lines is omitted.
-
-`conf` is the recognizer's confidence, 0 = uncertain … 1 = certain — the same values as ALTO
-`WC`. The line confidence is the one averaged into `mean_conf`. PAGE has no per-character
-confidence and no hyphenation markup: a word broken across a line end stays as two words with
-the hyphen, as in plain text.
-
-`primaryLanguage` comes from the same detector as ALTO `LANG` — see [Language](#language) —
-written as the PAGE language name (`Czech`, `German`, `English`, `Slovak`, `Polish`,
-`Latin`). `TUZKAOCR_ALTO_LANG` overrides it too.
+Regions appear in [reading order](configuration.md#reading-order). `conf` is the same
+0–1 confidence as ALTO `WC`. PAGE has no hyphenation markup. `primaryLanguage` comes from the
+same detector as ALTO [`LANG`](#language).
 
 ### Roles and region types
 
@@ -324,19 +269,6 @@ Without roles every region is `paragraph`.
 
 ## Both at once
 
-`multi` produces ALTO and text from a **single OCR pass**, so it costs the same as either one
-alone. Use it whenever you want both; running the page twice is pure waste. PAGE XML is not
-part of `multi`; request it with `page`.
-
-On the CLI, `--out` becomes a stem and both suffixes are appended:
-
-```bash
-tuzkaocr page.jpg --format multi --out page
-```
-
-```
-Done in 2.4s — 412 words, 37 lines → page.alto.xml, page.txt
-```
-
-On the API, one job holds both results and `?which=alto|txt` selects at download time,
-defaulting to `alto`. See [Getting both formats](api.md#getting-both-formats).
+`multi` produces ALTO and text from a **single OCR pass**. On the CLI `--out` becomes a stem
+(`page` → `page.alto.xml`, `page.txt`); on the API `?which=alto|txt` selects the download.
+PAGE XML is not part of `multi`.

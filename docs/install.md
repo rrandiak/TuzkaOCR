@@ -14,8 +14,7 @@
 | Hardware | Any x86-64 or ARM64 CPU; no GPU needed |
 | Network | None at runtime — models ship inside the package |
 
-Dependencies are version-pinned (NumPy 2.1, ONNX Runtime 1.25, OpenCV 4.10, SciPy 1.14),
-so install into a virtual environment rather than a system Python.
+Dependencies are version-pinned, so install into a virtual environment.
 
 ### Platform support
 
@@ -38,31 +37,11 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install .
 ```
 
-Releases are tagged, so pin a known version rather than tracking `main` when reproducibility
-matters:
-
-```bash
-git checkout v1.7.1        # or any tag listed on the releases page
-pip install --force-reinstall --no-deps .
-```
-
-The [releases page](https://github.com/moravianlibrary/TuzkaOCR/releases) lists every
-published version with its notes.
-
-This puts the `tuzkaocr` command on your `PATH` and installs the layout and recognition
-models as package data, so nothing is downloaded on first run.
+This puts `tuzkaocr` on your `PATH`; the models are bundled, so nothing is downloaded at run
+time. To pin a version, `git checkout` a tag from the
+[releases page](https://github.com/moravianlibrary/TuzkaOCR/releases) before installing.
 
 ### Verify
-
-```console
-$ tuzkaocr --help
-usage: tuzkaocr [-h] [--out OUT] [--out-dir OUT_DIR]
-                [--format {alto,txt,multi}] [--batch] ...
-```
-
-If the option list prints, the models resolved and ONNX Runtime loaded.
-
-Then OCR a real page:
 
 ```console
 $ tuzkaocr page.jpg --format txt --out page.txt
@@ -71,38 +50,25 @@ Done in 2.4s — 37 lines → page.txt
 
 ## Running without installing
 
-Every command also works from the repository root as `python cli.py …`, once the
-dependencies are present:
+From the repository root:
 
 ```bash
 pip install -r requirements.txt
 python cli.py page.jpg --out result.alto.xml
 ```
 
-This is also the only mode in which the `tuzkaocr.env` file is picked up — see
+Only this mode reads `tuzkaocr.env` — see
 [Configuration](configuration.md#where-settings-come-from).
 
 ## Upgrading
 
-`pip install .` is a no-op when the version in `pyproject.toml` has not changed, so after
-pulling new commits it can silently leave the old code and models in place. Force it:
+`pip install .` does nothing if the version number is unchanged, so force it:
 
 ```bash
 git pull
 pip install --force-reinstall --no-deps .
-pip show tuzkaocr | head -2
 ```
-
-Check that the reported version matches `pyproject.toml`. A stale install is the usual
-reason a newly added model or environment variable appears to be missing.
 
 ## Development install
 
-To have code edits take effect without reinstalling:
-
-```bash
-pip install -e .
-```
-
-Model files are read from the source tree in this mode, so dropping a new `.onnx` into
-`tuzkaocr/models/` makes it immediately resolvable by name.
+`pip install -e .` makes code and model edits take effect without reinstalling.

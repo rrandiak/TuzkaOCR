@@ -21,13 +21,7 @@ file.
     uvicorn api.app:app --host 0.0.0.0 --port 8000
     ```
 
-    ```
-    [auth] DISABLED — only safe on a trusted network
-    Loading models...
-    Ready.
-    ```
-
-Interactive OpenAPI documentation is served at `/docs`, and the schema at
+    Interactive OpenAPI documentation is served at `/docs`, and the schema at
 `/openapi.json`.
 
 ## Endpoints
@@ -64,9 +58,7 @@ curl -F "image=@page.jpg" http://localhost:8000/api/v1/process
 {"job_id": "3f2b1c8e-5d47-4a19-9c33-8e1f0a7b6d24", "status": "queued"}
 ```
 
-An empty `domain`, or `default` / `print` / `printed`, all select the printed models. An
-unrecognized `domain`, `fmt`, or `alto_profile`, or a `physical_img_nr` below 1, is
-rejected with **400** before the job is created.
+Invalid values are rejected with **400** before the job is created.
 
 ## Polling and downloading
 
@@ -90,16 +82,15 @@ curl -s "http://localhost:8000/api/v1/status/$JOB"
 }
 ```
 
-`status` is one of `queued`, `running`, `done`, or `failed`. `mean_conf` is the mean
-per-line recognition confidence and is a useful triage signal for bulk ingest — low values
-flag pages worth re-scanning.
+`status` is `queued`, `running`, `done`, or `failed`. A low `mean_conf` flags pages worth
+checking.
 
 ```bash
 curl -o result.txt "http://localhost:8000/api/v1/result/$JOB"
 ```
 
-The result endpoint doubles as a wait: it returns **202** while the job is `queued` or
-`running`, so a client can poll it directly instead of polling status.
+The result endpoint returns **202** while the job is still running, so you can poll it
+directly.
 
 ### Getting both formats
 
@@ -113,8 +104,6 @@ JOB=$(curl -s -F "image=@page.jpg" -F "fmt=multi" \
 curl -o result.alto.xml "http://localhost:8000/api/v1/result/$JOB"
 curl -o result.txt      "http://localhost:8000/api/v1/result/$JOB?which=txt"
 ```
-
-Responses carry `text/xml; charset=utf-8` or `text/plain; charset=utf-8` accordingly.
 
 ## Status codes
 
@@ -130,38 +119,19 @@ Responses carry `text/xml; charset=utf-8` or `text/plain; charset=utf-8` accordi
 | `500` | Processing failed for another reason; `error` carries the message |
 | `503` | Queue is full; a `Retry-After: 5` header is included |
 
-Oversize uploads are rejected cleanly whether or not the request declares a
-`Content-Length`, so streaming clients get a **413** rather than a broken connection.
-
-!!! note "Decode failures surface late"
-    An upload is accepted before the image is decoded, so a corrupt or over-large image
-    becomes a **failed job** rather than a rejected request. The failure appears as
-    `status: failed` with a message, and the result endpoint then answers **422**.
+Images are decoded after upload, so a corrupt or oversized image becomes a **failed job**
+and the result endpoint answers **422**.
 
 ## Backpressure
 
-`TUZKAOCR_MAX_QUEUE` (default 16) caps queued plus running jobs. Submitting past that
-returns **503** with `Retry-After: 5`; the check happens before the upload is spooled, so a
-full queue costs the client nothing but the round trip.
-
-Honour the header — a client that retries immediately will simply be refused again.
-Concurrency is set by `TUZKAOCR_PAGE_WORKERS`, not by the queue size.
+`TUZKAOCR_MAX_QUEUE` (default 16) caps queued plus running jobs; above it the server returns
+**503** with `Retry-After: 5`. Concurrency is set by `TUZKAOCR_PAGE_WORKERS`.
 
 ## Job lifetime and retention
 
-Jobs are tracked in memory; results are files under `TUZKAOCR_RESULTS_DIR`. Both are
-removed once a job is older than `TUZKAOCR_MAX_JOB_AGE_HOURS` (default 24). The sweep runs
-at startup and hourly, and also collects orphaned result files left by earlier server
-lifetimes.
-
-Two consequences worth designing around:
-
-- **Fetch results within the retention window.** After it passes, the job and its files are
-  gone.
-- **A restart forgets job metadata but keeps the files.** `status` answers **404** for a job
-  submitted before the restart, while `result` still serves it — the result endpoint falls
-  back to looking up the file by job ID on disk. Store the job IDs you care about
-  client-side.
+Jobs and their result files are deleted after `TUZKAOCR_MAX_JOB_AGE_HOURS` (default 24).
+Job status is kept in memory, so after a restart `status` answers **404**, but `result` still
+serves files that remain on disk.
 
 ## Authentication
 
@@ -203,9 +173,7 @@ Off by default, which is only safe on a trusted network. Two modes, both using t
     python -c "import secrets; print(secrets.token_urlsafe(32))"
     ```
 
-`/healthz` is deliberately left unauthenticated so container health checks and load
-balancers work. Every other endpoint requires the key once either mode is enabled, and
-startup fails with a clear message if the key file is missing, empty, or unparseable.
+`/healthz` is never authenticated, so health checks keep working.
 
 ## Listing models
 
@@ -224,11 +192,8 @@ curl -s http://localhost:8000/api/v1/models
 }
 ```
 
-`available` lists bundled layout and recognition models, including superseded files. The
-handwritten style file is not listed as a recognizer because it is loaded automatically with
-`rec-I-v2`. Only `selectable_via_domain` values are accepted as a `domain`; pinning a
-different bundled file is a server-side setting, described in
-[Models and domains](models.md#pinning-a-model).
+Only `selectable_via_domain` values are accepted as a `domain`; pinning another model is a
+[server-side setting](models.md#pinning-a-model).
 
 ## A complete client
 
@@ -273,8 +238,7 @@ print(f"mean confidence {conf:.3f}")
 
 ## Legacy endpoints
 
-Kept for older clients. Note that the upload field is named `file`, not `image`, and the
-response shapes differ.
+Kept for older clients; the upload field is `file`, not `image`.
 
 | Legacy | Current equivalent |
 |---|---|

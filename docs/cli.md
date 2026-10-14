@@ -7,11 +7,7 @@ tuzkaocr <input> [options]
 `<input>` is an image file, or a directory when `--batch` is given. Recognized extensions
 in batch mode are `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
 
-This page is the complete reference. For a guided first run that assumes no terminal
-experience, see [Step by step, no experience needed](beginners.md).
-
-After `pip install .` the `tuzkaocr` entry point is on `PATH`. From a checkout without
-installing, use `python cli.py` in place of `tuzkaocr` in every example below.
+From a checkout without installing, use `python cli.py` in place of `tuzkaocr`.
 
 ## Single page
 
@@ -64,9 +60,8 @@ replaced: `page.jpg` becomes `page.alto.xml`, `page.page.xml`, `page.txt`, or AL
 
 ## Choosing a domain
 
-`--domain` selects a matched layout and recognition model pair. This is the single setting
-with the largest effect on output quality — see [Models and domains](models.md) for what
-each pair was trained on.
+`--domain` selects the model pair and matters more than any other setting — see
+[Models and domains](models.md).
 
 ```bash
 tuzkaocr letter.jpg --domain handwritten --format txt --out letter.txt
@@ -78,9 +73,6 @@ tuzkaocr letter.jpg --domain handwritten --format txt --out letter.txt
 | `kramarky` | Kramarky broadsheet prints (a narrow, specialised domain) |
 | `handwritten` | Czech handwriting |
 | `kurrent` | German Kurrent / Sütterlin script |
-
-`handwritten` and `kurrent` additionally enable column-aware line ordering and extend line
-crops at both ends, which suits free-flowing script.
 
 ## Batch processing
 
@@ -101,13 +93,8 @@ Processing 148 images with 2 worker(s)...
 Done: 147/148 OK, 1 errors, total 268.1s (1.8s/page)
 ```
 
-Outputs are named after each input's stem inside `--out-dir` (default `results`). Each
-worker is a separate process that loads its own copy of the models, so memory scales with
-`--workers` — budget roughly **1.3 GiB per worker**; see
-[memory](configuration.md#memory).
-
-A page that fails is reported on its own line and counted in the final summary; the batch
-continues. The command exits non-zero only when the input directory contains no images.
+Outputs are named after each input's stem. Budget about **1.3 GiB per worker** (see
+[memory](configuration.md#memory)). A failing page is reported and the batch continues.
 
 ## Options
 
@@ -124,7 +111,7 @@ continues. The command exits non-zero only when the input directory contains no 
 
 | Option | Default | Effect |
 |---|---|---|
-| `--alto-profile` | `ndk` | `ndk` (Czech NDK ingest profile) or `basic` (pre-1.7.2 shape) |
+| `--alto-profile` | `ndk` | `ndk` (Czech NDK ingest profile) or `basic` (simpler layout for existing consumers) |
 | `--alto-agency` | *unset* | Institution running the OCR, written as `processingAgency` |
 | `--alto-lang` | *detected* | Force the `LANG` value |
 | `--alto-dpi` | *from the image* | Force the resolution used for `FONTSIZE` |
@@ -136,12 +123,10 @@ continues. The command exits non-zero only when the input directory contains no 
 ```bash
 tuzkaocr page.jpg --out result.alto.xml \
     --alto-agency "Moravian Library" \
-    --source-identifier uuid:1bd9de34-435f-11dd-b505-00145e5790ea
+    --source-identifier page-0007
 ```
 
-None of these are needed for ordinary OCR; unknown values are left out of the ALTO.
-`--source-identifier` and `--physical-img-nr` are rejected together with `--batch`. See
-[Configuration](configuration.md#alto-output) and [Output formats](output-formats.md#profiles).
+None of these are needed for ordinary OCR. See [Configuration](configuration.md#alto-output).
 
 ### Model selection
 
@@ -152,9 +137,7 @@ None of these are needed for ordinary OCR; unknown values are left out of the AL
 | `--ocr-model` | *per domain* | Override the recognition model, by bundled filename or path |
 | `--vocab` | `vocab.json` | Override the recognizer character set |
 
-`--layout-model` and `--ocr-model` override individual slots of the chosen `--domain`, so
-you can swap one half of a pair. When `--ocr-model` selects a page-style recognizer, its
-`.style` sibling is found automatically. `--vocab` must match the recognizer in use.
+`--layout-model` and `--ocr-model` replace one half of the chosen domain's pair.
 
 ### Performance
 
@@ -165,47 +148,25 @@ you can swap one half of a pair. When `--ocr-model` selects a page-style recogni
 | `--line-workers` | `4` | Parallel line-recognition threads within one page |
 | `--device` | `cpu` | `cpu`, `cuda`, or `auto` |
 
-`--device auto` uses CUDA when `onnxruntime` reports a CUDA execution provider and falls
-back to CPU otherwise. The plain `onnxruntime` wheel is CPU-only, so `auto` resolves to
-`cpu` unless `onnxruntime-gpu` is installed.
+`--device auto` uses CUDA only when `onnxruntime-gpu` is installed.
 
 ### Quality
 
 | Option | Default | Effect |
 |---|---|---|
 | `--height-scale` | `1.0` | Multiply predicted line heights; try `1.5` if crops clip ascenders |
-| `--no-adaptive` | *adaptive on* | Run layout at the fixed downsample instead of sizing it to the page's text (always the case for `handwritten`, `kurrent` and `kramarky`) |
-| `--reading-order` | `columns` | Block order on printed pages: `columns` or `basic`; overrides `TUZKAOCR_READING_ORDER` |
+| `--no-adaptive` | *adaptive on* | Use the fixed layout downsample instead of sizing it to the page's text |
+| `--reading-order` | `columns` | Block order on printed pages: `columns` or `basic` |
 | `--no-large-text` | *large text on* | Skip the extra layout pass for mastheads and other very large text |
 | `--role-classifier` | off | Tag each line with a structural role in the ALTO output |
 
-**Adaptive downsampling** is on by default for the printed domain. Before layout, each page's
-typical text-line height is estimated and the page is scaled so its lines reach the layout
-model about 12 pixels tall, in a single layout pass. Newspapers and other small-type pages
-get a finer layout than a fixed downsample would give; large book type gets a coarser one.
-`--no-adaptive` uses the fixed downsample for every page. The `handwritten`, `kurrent` and
-`kramarky` domains always use the fixed downsample. See
-[Configuration](configuration.md#adaptive-downsampling) for details.
-
-**Reading order** is column by column by default (`--reading-order columns`): printed rules,
-column gutters and the masthead header row decide the order of text blocks.
-`--reading-order basic` restores the earlier order, horizontal bands read left to right.
-**Large text** (on by default) adds a coarse layout pass on pages with a masthead or other
-text far larger than the body text, so the title is read as one line instead of letter
-fragments; `--no-large-text` skips it. Both apply to the printed domain only. The
-`handwritten`, `kurrent` and `kramarky` domains always use the `basic` order without the
-large-text pass. See [Configuration](configuration.md#reading-order).
-
-**Role classification** tags every line as `body`, `heading`, `header`, `footer`, or
-`page_number`, surfaced in ALTO as a `StructureTag`. It costs a few milliseconds per page
-and only affects `alto`, `page` and `multi` output. It prefers silence over wrong markup: when the
-classifier is not confident, the line stays `body`, so mistakes appear as a missing tag
-rather than an incorrect one. See [Output formats](output-formats.md#line-roles).
+`--no-adaptive`, `--reading-order` and `--no-large-text` affect the printed domain only; see
+[Configuration](configuration.md#adaptive-downsampling). For roles see
+[Output formats](output-formats.md#line-roles).
 
 ## Environment variables
 
-Every default above comes from the configuration layer, so an environment variable changes
-the default and the command-line flag overrides it for that invocation:
+An environment variable sets the default; a flag overrides it for that run:
 
 ```bash
 TUZKAOCR_OCR_THREADS=8 tuzkaocr page.jpg --out result.alto.xml
